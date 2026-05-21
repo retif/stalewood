@@ -79,8 +79,19 @@ func findWorktreesDirs(root string) ([]string, error) {
 	return found, err
 }
 
+// hasGitEntry reports whether path has its own ".git" entry — a file for a
+// linked worktree, a directory for a full checkout. A directory that merely
+// sits under a .claude/worktrees path (e.g. a committed test fixture) has
+// none, and is not a worktree.
+func hasGitEntry(path string) bool {
+	_, err := os.Lstat(filepath.Join(path, ".git"))
+	return err == nil
+}
+
 // collectWorktrees finds every worktrees dir under root and returns the
-// immediate child directories — the individual worktrees themselves.
+// immediate child directories that are worktrees — i.e. that carry their own
+// ".git" entry. Plain directories that only happen to sit under a
+// .claude/worktrees path are skipped.
 func collectWorktrees(root string) ([]string, error) {
 	dirs, err := findWorktreesDirs(root)
 	if err != nil {
@@ -93,8 +104,12 @@ func collectWorktrees(root string) ([]string, error) {
 			continue
 		}
 		for _, ent := range entries {
-			if ent.IsDir() {
-				wts = append(wts, filepath.Join(d, ent.Name()))
+			if !ent.IsDir() {
+				continue
+			}
+			child := filepath.Join(d, ent.Name())
+			if hasGitEntry(child) {
+				wts = append(wts, child)
 			}
 		}
 	}

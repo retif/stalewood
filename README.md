@@ -42,11 +42,15 @@ stale-worktrees -json ~/projects              # machine-readable output
 
 ## How it works
 
-1. **Detect** — walks the tree for any `.claude/worktrees` directory and
-   treats each immediate child as a worktree. `node_modules` and `.git` are
-   skipped; a worktrees dir is not descended into, so nested fixtures are not
-   double-counted. A child that is not actually a git worktree is reported as
-   an error rather than silently dropped.
+1. **Detect** — walks the tree for any `.claude/worktrees` directory and takes
+   each immediate child *that carries its own `.git` entry* as a worktree.
+   `node_modules` and `.git` are skipped, and a worktrees dir is not descended
+   into, so nested fixtures are not double-counted. Detection is by path
+   convention, not `git worktree list` — so an abandoned worktree git has
+   forgotten is still found. A directory with no `.git` entry (e.g. a committed
+   test fixture that merely sits under such a path) is not a worktree and is
+   skipped silently; a child that has a `.git` entry but is not a valid linked
+   worktree is surfaced as an error row.
 2. **Classify** — a worktree counts as **merged** if either:
    - its HEAD is an ancestor of its **base** branch
      (`git merge-base --is-ancestor`); or

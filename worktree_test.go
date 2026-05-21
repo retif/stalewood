@@ -272,12 +272,36 @@ func TestBaseOverride(t *testing.T) {
 	}
 }
 
-// TestNonWorktreeDir verifies a plain directory under .claude/worktrees is
-// reported as an error rather than crashing.
-func TestNonWorktreeDir(t *testing.T) {
+// TestPlainDirSkipped verifies a directory that merely sits under a
+// .claude/worktrees path but has no .git entry (e.g. a committed test
+// fixture) is not listed as a worktree at all.
+func TestPlainDirSkipped(t *testing.T) {
 	root := t.TempDir()
 	plain := filepath.Join(root, "repo", ".claude", "worktrees", "notawt")
 	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plain, "plugin.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := collectWorktrees(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("plain dir without .git should be skipped, got %v", paths)
+	}
+}
+
+// TestBrokenWorktreeReported verifies a dir that does carry a .git entry but
+// is not a valid linked worktree is still surfaced, as an error row.
+func TestBrokenWorktreeReported(t *testing.T) {
+	root := t.TempDir()
+	broken := filepath.Join(root, "repo", ".claude", "worktrees", "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nowhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	paths, err := collectWorktrees(root)
@@ -285,10 +309,9 @@ func TestNonWorktreeDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(paths) != 1 {
-		t.Fatalf("found %d, want 1", len(paths))
+		t.Fatalf("dir with a .git entry should be listed, got %v", paths)
 	}
-	w := analyze(paths[0], false, "")
-	if w.Err == "" {
-		t.Errorf("expected error for non-worktree dir, got none")
+	if w := analyze(paths[0], false, ""); w.Err == "" {
+		t.Errorf("expected an error for the broken worktree, got none")
 	}
 }
