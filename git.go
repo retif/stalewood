@@ -72,6 +72,39 @@ func isDirty(dir string) bool {
 	return err == nil && out != ""
 }
 
+// detectBase recovers the ref a branch was forked from by reading the
+// "Created from" entry git writes to the branch reflog at creation time.
+// It returns ok=false when there is no usable base: no reflog (expired or a
+// pre-existing branch), created from a bare "HEAD", or created from a commit
+// that no longer corresponds to a named branch.
+func detectBase(repo, branch string) (string, bool) {
+	if branch == "" {
+		return "", false
+	}
+	out, err := git(repo, "reflog", "show", branch)
+	if err != nil || out == "" {
+		return "", false
+	}
+	const marker = ": branch: Created from "
+	var ref string
+	for _, ln := range strings.Split(out, "\n") {
+		if i := strings.Index(ln, marker); i >= 0 {
+			ref = strings.TrimSpace(ln[i+len(marker):]) // last match = creation entry
+		}
+	}
+	if ref == "" || ref == "HEAD" {
+		return "", false
+	}
+	full, err := git(repo, "rev-parse", "--symbolic-full-name", ref)
+	if err != nil || full == "" {
+		return "", false // not a resolvable name (e.g. a bare SHA)
+	}
+	if !strings.HasPrefix(full, "refs/heads/") && !strings.HasPrefix(full, "refs/remotes/") {
+		return "", false
+	}
+	return ref, true
+}
+
 // orderedRemotes lists the repo's remotes with origin and upstream first,
 // the rest alphabetical — the order auto-detection tries them in.
 func orderedRemotes(repo string) []string {
@@ -99,16 +132,16 @@ func orderedRemotes(repo string) []string {
 	return all
 }
 
-// resolveMainRef determines the repo's integration branch. When override is
-// set it is used verbatim (after a resolvability check); otherwise detection
-// tries, in order: a local main/master, each remote's HEAD, then each
-// remote's main/master. It returns a display name and a resolvable git ref.
-func resolveMainRef(repo, override string) (name, ref string, err error) {
+// autoMainRef determines a repo's integration branch when no base could be
+// recovered for a worktree. When override is set it is used verbatim (after a
+// resolvability check); otherwise detection tries, in order: a local
+// main/master, each remote's HEAD, then each remote's main/master.
+func autoMainRef(repo, override string) (name, ref string, err error) {
 	if override != "" {
 		if gitOK(repo, "rev-parse", "--verify", "--quiet", override+"^{commit}") {
 			return override, override, nil
 		}
-		return "", "", errors.New("main ref " + override + " not found in repo")
+		return "", "", errors.New("base ref " + override + " not found in repo")
 	}
 
 	for _, b := range []string{"main", "master"} {
@@ -132,13 +165,13 @@ func resolveMainRef(repo, override string) (name, ref string, err error) {
 			}
 		}
 	}
-	return "", "", errors.New("could not determine main branch (pass -main)")
+	return "", "", errors.New("could not determine base branch (pass -base)")
 }
 
-// isMerged reports whether commit is an ancestor of mainRef (i.e. already
+// isMerged reports whether commit is an ancestor of baseRef (i.e. already
 // integrated). It distinguishes a clean "not merged" from a real error.
-func isMerged(repo, commit, mainRef string) (bool, error) {
-	cmd := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", commit, mainRef)
+func isMerged(repo, commit, baseRef string) (bool, error) {
+	cmd := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", commit, baseRef)
 	err := cmd.Run()
 	if err == nil {
 		return true, nil

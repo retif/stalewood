@@ -1,6 +1,6 @@
 // Command stale-worktrees scans a directory tree for Claude Code worktrees
 // (".claude/worktrees/*") and reports, for each one, whether its branch has
-// already been merged into the owning repo's main branch. With -prune it
+// already been merged into the branch it was forked from. With -prune it
 // removes the worktrees that are fully merged.
 package main
 
@@ -14,11 +14,11 @@ import (
 )
 
 func main() {
-	prune := flag.Bool("prune", false, "remove worktrees whose branch is merged into main")
+	prune := flag.Bool("prune", false, "remove worktrees whose branch is merged into its base")
 	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that have uncommitted changes")
 	jsonOut := flag.Bool("json", false, "emit JSON instead of a table")
 	withSize := flag.Bool("size", false, "measure each worktree's disk usage")
-	mainBranch := flag.String("main", "", "branch/ref to test merge against (default: auto-detect)")
+	base := flag.String("base", "", "ref to test every worktree against (default: per-worktree base)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -43,7 +43,7 @@ func main() {
 	measure := *withSize || *prune
 	wts := make([]Worktree, len(paths))
 	for i, p := range paths {
-		wts[i] = analyze(p, measure, *mainBranch)
+		wts[i] = analyze(p, measure, *base)
 	}
 
 	if *prune {
@@ -64,18 +64,25 @@ Usage:
 
   path   directory tree to scan (default ".")
 
+Each worktree's branch is tested against the branch it was forked from
+(recovered from the reflog). When the base cannot be recovered, the repo's
+main/master branch is used instead.
+
 Flags:
-  -prune        remove worktrees whose branch is merged into main
+  -prune        remove worktrees whose branch is merged into its base
   -force        with -prune, also remove merged worktrees with uncommitted changes
   -size         measure each worktree's disk usage
-  -main REF     branch/ref to test merge against (default: auto-detect)
+  -base REF     test every worktree against REF instead of its own base
   -json         emit JSON instead of a table
+
+The BASE column shows the ref used; "(auto)" means the base could not be
+recovered and main/master was used, "(flag)" means -base was given.
 
 Examples:
   stale-worktrees ~/projects               # report
-  stale-worktrees -size ~/projects         # report with disk usage
-  stale-worktrees -main develop ~/repo     # check against a non-default branch
-  stale-worktrees -prune ~/projects        # remove merged worktrees
+  stale-worktrees -size ~/projects          # report with disk usage
+  stale-worktrees -base oleks/main ~/repo   # force a specific base
+  stale-worktrees -prune ~/projects         # remove merged worktrees
 `)
 }
 
@@ -92,13 +99,29 @@ func repoLabel(root, repo string) string {
 	return filepath.Base(repo)
 }
 
+// baseLabel renders the base ref plus a marker when it was not the worktree's
+// own recovered base.
+func baseLabel(w Worktree) string {
+	if w.Base == "" {
+		return "-"
+	}
+	switch w.BaseFrom {
+	case "auto":
+		return w.Base + " (auto)"
+	case "flag":
+		return w.Base + " (flag)"
+	default:
+		return w.Base
+	}
+}
+
 func emitTable(root string, wts []Worktree, withSize bool) {
 	if len(wts) == 0 {
 		fmt.Println("No .claude/worktrees found under", root)
 		return
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	header := "REPO\tWORKTREE\tBRANCH\tMAIN\tSTATUS"
+	header := "REPO\tWORKTREE\tBRANCH\tBASE\tSTATUS"
 	if withSize {
 		header += "\tSIZE"
 	}
@@ -122,16 +145,12 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if w.Detached {
 			branch = "(detached)"
 		}
-		main := w.MainRef
-		if main == "" {
-			main = "-"
-		}
 		status := w.Status()
 		if w.Err != "" {
 			status = "error: " + w.Err
 		}
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
-			repoLabel(root, w.Repo), w.Name, branch, main, status)
+			repoLabel(root, w.Repo), w.Name, branch, baseLabel(w), status)
 		if withSize {
 			row += "\t" + humanSize(w.SizeBytes)
 		}

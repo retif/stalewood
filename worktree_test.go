@@ -50,6 +50,23 @@ func TestStatusAndPrunable(t *testing.T) {
 	}
 }
 
+func TestBaseLabel(t *testing.T) {
+	cases := []struct {
+		w    Worktree
+		want string
+	}{
+		{Worktree{Base: "origin/main", BaseFrom: "reflog"}, "origin/main"},
+		{Worktree{Base: "main", BaseFrom: "auto"}, "main (auto)"},
+		{Worktree{Base: "develop", BaseFrom: "flag"}, "develop (flag)"},
+		{Worktree{Base: ""}, "-"},
+	}
+	for i, c := range cases {
+		if got := baseLabel(c.w); got != c.want {
+			t.Errorf("case %d: baseLabel = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
 // run executes a command in dir and fails the test on error.
 func run(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
@@ -64,7 +81,8 @@ func run(t *testing.T, dir, name string, args ...string) {
 }
 
 // TestScanAndAnalyze builds a real repo with a merged worktree and an
-// unmerged-dirty worktree, then verifies detection end to end.
+// unmerged-dirty worktree, then verifies detection end to end — including
+// that the base is recovered from the reflog.
 func TestScanAndAnalyze(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -87,11 +105,11 @@ func TestScanAndAnalyze(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Merged worktree: branch sits exactly at main, so HEAD is an ancestor.
+	// Merged worktree: branch forked from main, no commits ahead.
 	mergedWT := filepath.Join(wtDir, "merged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-merged", mergedWT, "main")
 
-	// Unmerged + dirty worktree: a new commit ahead of main, plus an
+	// Unmerged + dirty worktree: a commit ahead of main, plus an
 	// uncommitted edit on top.
 	unmergedWT := filepath.Join(wtDir, "unmerged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-unmerged", unmergedWT, "main")
@@ -131,6 +149,9 @@ func TestScanAndAnalyze(t *testing.T) {
 	if m.Branch != "feat-merged" {
 		t.Errorf("merged worktree: Branch = %q, want feat-merged", m.Branch)
 	}
+	if m.Base != "main" || m.BaseFrom != "reflog" {
+		t.Errorf("merged worktree: base = %q from %q, want main from reflog", m.Base, m.BaseFrom)
+	}
 	if !m.Prunable() {
 		t.Errorf("merged worktree: Prunable = false, want true")
 	}
@@ -147,6 +168,37 @@ func TestScanAndAnalyze(t *testing.T) {
 	}
 	if u.Prunable() {
 		t.Errorf("unmerged worktree: Prunable = true, want false")
+	}
+}
+
+// TestBaseOverride verifies -base forces the ref and marks BaseFrom as "flag".
+func TestBaseOverride(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "r")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repo, "git", "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "f"), []byte("a\n"), 0o644)
+	run(t, repo, "git", "add", "-A")
+	run(t, repo, "git", "commit", "-q", "-m", "c0")
+	run(t, repo, "git", "branch", "develop")
+
+	wt := filepath.Join(repo, ".claude", "worktrees", "w")
+	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat", wt, "main")
+
+	w := analyze(wt, false, "develop")
+	if w.Err != "" {
+		t.Fatalf("errored: %s", w.Err)
+	}
+	if w.Base != "develop" || w.BaseFrom != "flag" {
+		t.Errorf("base = %q from %q, want develop from flag", w.Base, w.BaseFrom)
 	}
 }
 

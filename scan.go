@@ -8,15 +8,16 @@ import (
 )
 
 // Worktree is one Claude Code worktree dir plus its analysis against the
-// owning repo's main branch.
+// branch it was forked from.
 type Worktree struct {
 	Path      string `json:"path"`       // absolute path to the worktree dir
 	Repo      string `json:"repo"`       // absolute path to the owning repo root
 	Name      string `json:"name"`       // basename of the worktree dir
 	Branch    string `json:"branch"`     // checked-out branch ("" when detached)
 	Head      string `json:"head"`       // short HEAD sha
-	MainRef   string `json:"main_ref"`   // main branch the merge check ran against
-	Merged    bool   `json:"merged"`     // HEAD is an ancestor of MainRef
+	Base      string `json:"base"`       // ref the merge check ran against
+	BaseFrom  string `json:"base_from"`  // how Base was chosen: reflog | auto | flag
+	Merged    bool   `json:"merged"`     // HEAD is an ancestor of Base
 	Dirty     bool   `json:"dirty"`      // has uncommitted changes
 	Detached  bool   `json:"detached"`   // HEAD is detached (no branch)
 	SizeBytes int64  `json:"size_bytes"` // disk usage, -1 when not measured
@@ -40,8 +41,9 @@ func (w *Worktree) Status() string {
 	}
 }
 
-// Prunable reports whether the worktree's branch is fully merged and so the
-// worktree is safe to remove. A dirty merged worktree is prunable only with force.
+// Prunable reports whether the worktree's branch is fully merged into its
+// base and so the worktree is safe to remove. A dirty merged worktree is
+// prunable only with force.
 func (w *Worktree) Prunable() bool {
 	return w.Err == "" && w.Merged
 }
@@ -100,10 +102,12 @@ func collectWorktrees(root string) ([]string, error) {
 	return wts, nil
 }
 
-// analyze inspects a single worktree directory and classifies it against its
-// repo's main branch. withSize controls whether disk usage is measured;
-// mainOverride, when non-empty, forces the ref the merge check runs against.
-func analyze(path string, withSize bool, mainOverride string) Worktree {
+// analyze inspects a single worktree directory and classifies it against the
+// branch it was forked from. withSize controls whether disk usage is measured.
+// baseOverride, when non-empty, forces the ref the merge check runs against;
+// otherwise the base is recovered per-worktree from the reflog, falling back
+// to the repo's auto-detected main branch.
+func analyze(path string, withSize bool, baseOverride string) Worktree {
 	w := Worktree{Path: path, Name: filepath.Base(path), SizeBytes: -1}
 	// repo root: <repo>/.claude/worktrees/<name> -> up three levels.
 	w.Repo = filepath.Dir(filepath.Dir(filepath.Dir(path)))
@@ -129,12 +133,13 @@ func analyze(path string, withSize bool, mainOverride string) Worktree {
 	w.Detached = w.Branch == ""
 	w.Dirty = isDirty(path)
 
-	name, ref, err := resolveMainRef(w.Repo, mainOverride)
+	name, ref, from, err := resolveBase(w.Repo, w.Branch, baseOverride)
 	if err != nil {
 		w.Err = err.Error()
 		return w
 	}
-	w.MainRef = name
+	w.Base = name
+	w.BaseFrom = from
 
 	merged, err := isMerged(w.Repo, head, ref)
 	if err != nil {
@@ -143,6 +148,26 @@ func analyze(path string, withSize bool, mainOverride string) Worktree {
 	}
 	w.Merged = merged
 	return w
+}
+
+// resolveBase picks the ref to test a worktree branch against. It returns a
+// display name, a resolvable git ref, and how the choice was made:
+//
+//	flag   - the explicit -base override
+//	reflog - recovered from the branch's "Created from" reflog entry
+//	auto   - fell back to the repo's main/master branch
+//
+// Precedence is override > reflog > auto.
+func resolveBase(repo, branch, override string) (name, ref, from string, err error) {
+	if override != "" {
+		n, r, e := autoMainRef(repo, override)
+		return n, r, "flag", e
+	}
+	if b, ok := detectBase(repo, branch); ok {
+		return b, b, "reflog", nil
+	}
+	n, r, e := autoMainRef(repo, "")
+	return n, r, "auto", e
 }
 
 // dirSize sums the apparent size of all regular files under path.
