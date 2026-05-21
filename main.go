@@ -1,7 +1,7 @@
 // Command stale-worktrees scans a directory tree for Claude Code worktrees
-// (".claude/worktrees/*") and reports, for each one, whether its branch has
-// already been merged into the branch it was forked from. With -prune it
-// removes the worktrees that are fully merged.
+// (".claude/worktrees/*") and reports, for each one, whether its work is
+// already integrated — merged into the branch it was forked from, or present
+// in any other branch. With -prune it removes the worktrees that are merged.
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	prune := flag.Bool("prune", false, "remove worktrees whose branch is merged into its base")
+	prune := flag.Bool("prune", false, "remove worktrees whose work is merged")
 	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that have uncommitted changes")
 	jsonOut := flag.Bool("json", false, "emit JSON instead of a table")
 	withSize := flag.Bool("size", false, "measure each worktree's disk usage")
@@ -64,25 +64,31 @@ Usage:
 
   path   directory tree to scan (default ".")
 
-Each worktree's branch is tested against the branch it was forked from
-(recovered from the reflog). When the base cannot be recovered, the repo's
-main/master branch is used instead.
+A worktree counts as merged if its HEAD is an ancestor of its base branch, or
+if HEAD is contained in any branch other than its own. The base is recovered
+per-worktree from the reflog (creation ref, then creation SHA via name-rev),
+then the branch's upstream; failing all that, the repo's main branch is used.
 
 Flags:
-  -prune        remove worktrees whose branch is merged into its base
+  -prune        remove worktrees whose work is merged
   -force        with -prune, also remove merged worktrees with uncommitted changes
   -size         measure each worktree's disk usage
   -base REF     test every worktree against REF instead of its own base
   -json         emit JSON instead of a table
 
-The BASE column shows the ref used; "(auto)" means the base could not be
-recovered and main/master was used, "(flag)" means -base was given.
+In the table, the BASE column suffix shows how the base was found:
+  (no suffix)  recovered from the reflog
+  (sha)        recovered from the reflog creation SHA via name-rev
+  (upstream)   the branch's upstream branch
+  (auto)       fell back to the repo's main/master branch
+  (flag)       supplied via -base
+A "merged -> REF" status means the work was found in REF, a branch other than
+the worktree's own base.
 
 Examples:
-  stale-worktrees ~/projects               # report
-  stale-worktrees -size ~/projects          # report with disk usage
-  stale-worktrees -base oleks/main ~/repo   # force a specific base
-  stale-worktrees -prune ~/projects         # remove merged worktrees
+  stale-worktrees -size ~/projects             # report, with disk usage
+  stale-worktrees -base oleks/main ~/repo      # force a specific base
+  stale-worktrees -prune ~/projects            # remove merged worktrees
 `)
 }
 
@@ -99,20 +105,36 @@ func repoLabel(root, repo string) string {
 	return filepath.Base(repo)
 }
 
-// baseLabel renders the base ref plus a marker when it was not the worktree's
-// own recovered base.
+// baseLabel renders the base ref plus a marker for how it was recovered.
 func baseLabel(w Worktree) string {
 	if w.Base == "" {
 		return "-"
 	}
 	switch w.BaseFrom {
+	case "reflog-sha":
+		return w.Base + " (sha)"
+	case "upstream":
+		return w.Base + " (upstream)"
 	case "auto":
 		return w.Base + " (auto)"
 	case "flag":
 		return w.Base + " (flag)"
-	default:
+	default: // reflog
 		return w.Base
 	}
+}
+
+// statusLabel renders the STATUS cell, annotating where merged work was found
+// when that is a branch other than the worktree's own base.
+func statusLabel(w Worktree) string {
+	if w.Err != "" {
+		return "error: " + w.Err
+	}
+	s := w.Status()
+	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
+		s += " -> " + w.MergedInto
+	}
+	return s
 }
 
 func emitTable(root string, wts []Worktree, withSize bool) {
@@ -145,12 +167,8 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if w.Detached {
 			branch = "(detached)"
 		}
-		status := w.Status()
-		if w.Err != "" {
-			status = "error: " + w.Err
-		}
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
-			repoLabel(root, w.Repo), w.Name, branch, baseLabel(w), status)
+			repoLabel(root, w.Repo), w.Name, branch, baseLabel(w), statusLabel(w))
 		if withSize {
 			row += "\t" + humanSize(w.SizeBytes)
 		}

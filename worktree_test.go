@@ -56,6 +56,8 @@ func TestBaseLabel(t *testing.T) {
 		want string
 	}{
 		{Worktree{Base: "origin/main", BaseFrom: "reflog"}, "origin/main"},
+		{Worktree{Base: "main", BaseFrom: "reflog-sha"}, "main (sha)"},
+		{Worktree{Base: "develop", BaseFrom: "upstream"}, "develop (upstream)"},
 		{Worktree{Base: "main", BaseFrom: "auto"}, "main (auto)"},
 		{Worktree{Base: "develop", BaseFrom: "flag"}, "develop (flag)"},
 		{Worktree{Base: ""}, "-"},
@@ -63,6 +65,23 @@ func TestBaseLabel(t *testing.T) {
 	for i, c := range cases {
 		if got := baseLabel(c.w); got != c.want {
 			t.Errorf("case %d: baseLabel = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
+func TestStatusLabel(t *testing.T) {
+	cases := []struct {
+		w    Worktree
+		want string
+	}{
+		{Worktree{Merged: true, Base: "main", MergedInto: "main"}, "merged"},
+		{Worktree{Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
+		{Worktree{}, "unmerged"},
+		{Worktree{Err: "boom"}, "error: boom"},
+	}
+	for i, c := range cases {
+		if got := statusLabel(c.w); got != c.want {
+			t.Errorf("case %d: statusLabel = %q, want %q", i, got, c.want)
 		}
 	}
 }
@@ -80,32 +99,45 @@ func run(t *testing.T, dir, name string, args ...string) {
 	}
 }
 
-// TestScanAndAnalyze builds a real repo with a merged worktree and an
-// unmerged-dirty worktree, then verifies detection end to end — including
-// that the base is recovered from the reflog.
-func TestScanAndAnalyze(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	root := t.TempDir()
-	repo := filepath.Join(root, "myrepo")
+// initRepo creates a git repo at <root>/<name> with one commit on main.
+func initRepo(t *testing.T, root, name string) string {
+	t.Helper()
+	repo := filepath.Join(root, name)
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-
 	run(t, repo, "git", "init", "-q", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	run(t, repo, "git", "add", "-A")
 	run(t, repo, "git", "commit", "-q", "-m", "initial")
+	return repo
+}
 
+func commit(t *testing.T, dir, file, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(msg+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, dir, "git", "add", "-A")
+	run(t, dir, "git", "commit", "-q", "-m", msg)
+}
+
+// TestScanAndAnalyze builds a repo with a merged worktree and an
+// unmerged-dirty worktree and verifies detection end to end.
+func TestScanAndAnalyze(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "myrepo")
 	wtDir := filepath.Join(repo, ".claude", "worktrees")
 	if err := os.MkdirAll(wtDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Merged worktree: branch forked from main, no commits ahead.
+	// Merged worktree: forked from main, no commits ahead.
 	mergedWT := filepath.Join(wtDir, "merged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-merged", mergedWT, "main")
 
@@ -113,11 +145,7 @@ func TestScanAndAnalyze(t *testing.T) {
 	// uncommitted edit on top.
 	unmergedWT := filepath.Join(wtDir, "unmerged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-unmerged", unmergedWT, "main")
-	if err := os.WriteFile(filepath.Join(unmergedWT, "new.txt"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run(t, unmergedWT, "git", "add", "-A")
-	run(t, unmergedWT, "git", "commit", "-q", "-m", "ahead")
+	commit(t, unmergedWT, "new.txt", "ahead")
 	if err := os.WriteFile(filepath.Join(unmergedWT, "dirty.txt"), []byte("y\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -140,17 +168,15 @@ func TestScanAndAnalyze(t *testing.T) {
 	if m.Err != "" {
 		t.Fatalf("merged worktree errored: %s", m.Err)
 	}
-	if !m.Merged {
-		t.Errorf("merged worktree: Merged = false, want true")
-	}
-	if m.Dirty {
-		t.Errorf("merged worktree: Dirty = true, want false")
+	if !m.Merged || m.Dirty {
+		t.Errorf("merged worktree: Merged=%v Dirty=%v, want true/false", m.Merged, m.Dirty)
 	}
 	if m.Branch != "feat-merged" {
 		t.Errorf("merged worktree: Branch = %q, want feat-merged", m.Branch)
 	}
-	if m.Base != "main" || m.BaseFrom != "reflog" {
-		t.Errorf("merged worktree: base = %q from %q, want main from reflog", m.Base, m.BaseFrom)
+	if m.Base != "main" || m.BaseFrom != "reflog" || m.MergedInto != "main" {
+		t.Errorf("merged worktree: base=%q from=%q into=%q, want main/reflog/main",
+			m.Base, m.BaseFrom, m.MergedInto)
 	}
 	if !m.Prunable() {
 		t.Errorf("merged worktree: Prunable = false, want true")
@@ -160,14 +186,66 @@ func TestScanAndAnalyze(t *testing.T) {
 	if u.Err != "" {
 		t.Fatalf("unmerged worktree errored: %s", u.Err)
 	}
-	if u.Merged {
-		t.Errorf("unmerged worktree: Merged = true, want false")
-	}
-	if !u.Dirty {
-		t.Errorf("unmerged worktree: Dirty = false, want true")
+	if u.Merged || !u.Dirty {
+		t.Errorf("unmerged worktree: Merged=%v Dirty=%v, want false/true", u.Merged, u.Dirty)
 	}
 	if u.Prunable() {
 		t.Errorf("unmerged worktree: Prunable = true, want false")
+	}
+}
+
+// TestContainsMerge verifies that work integrated into a branch other than
+// the worktree's base is still detected as merged.
+func TestContainsMerge(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	wt := filepath.Join(repo, ".claude", "worktrees", "w")
+	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "wt", wt, "main")
+	commit(t, wt, "f.txt", "wt work")
+	// A separate branch that also contains the worktree's commit.
+	run(t, repo, "git", "branch", "release", "wt")
+
+	w := analyze(wt, false, "")
+	if w.Err != "" {
+		t.Fatalf("errored: %s", w.Err)
+	}
+	if w.Base != "main" {
+		t.Errorf("Base = %q, want main", w.Base)
+	}
+	if !w.Merged || w.MergedInto != "release" {
+		t.Errorf("Merged=%v MergedInto=%q, want true/release", w.Merged, w.MergedInto)
+	}
+}
+
+// TestBaseFromCreationSHA verifies that a branch created from a bare "HEAD"
+// still has its base recovered, via the reflog creation SHA and name-rev.
+func TestBaseFromCreationSHA(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	wt := filepath.Join(repo, ".claude", "worktrees", "w")
+	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No start point: the branch is created from HEAD, so the reflog ref is
+	// the unhelpful literal "HEAD" -- recovery must fall back to the SHA.
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "fromhead", wt)
+	commit(t, wt, "f.txt", "ahead")
+
+	w := analyze(wt, false, "")
+	if w.Err != "" {
+		t.Fatalf("errored: %s", w.Err)
+	}
+	if w.Base != "main" || w.BaseFrom != "reflog-sha" {
+		t.Errorf("base = %q from %q, want main from reflog-sha", w.Base, w.BaseFrom)
 	}
 }
 
@@ -177,16 +255,8 @@ func TestBaseOverride(t *testing.T) {
 		t.Skip("git not available")
 	}
 	root := t.TempDir()
-	repo := filepath.Join(root, "r")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	run(t, repo, "git", "init", "-q", "-b", "main")
-	os.WriteFile(filepath.Join(repo, "f"), []byte("a\n"), 0o644)
-	run(t, repo, "git", "add", "-A")
-	run(t, repo, "git", "commit", "-q", "-m", "c0")
+	repo := initRepo(t, root, "r")
 	run(t, repo, "git", "branch", "develop")
-
 	wt := filepath.Join(repo, ".claude", "worktrees", "w")
 	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
 		t.Fatal(err)

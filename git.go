@@ -72,37 +72,151 @@ func isDirty(dir string) bool {
 	return err == nil && out != ""
 }
 
-// detectBase recovers the ref a branch was forked from by reading the
-// "Created from" entry git writes to the branch reflog at creation time.
-// It returns ok=false when there is no usable base: no reflog (expired or a
-// pre-existing branch), created from a bare "HEAD", or created from a commit
-// that no longer corresponds to a named branch.
-func detectBase(repo, branch string) (string, bool) {
-	if branch == "" {
+// leaf returns the last "/"-separated segment of a ref name.
+func leaf(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
+// shortRef strips the refs/heads/ or refs/remotes/ prefix from a full ref.
+func shortRef(ref string) string {
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	ref = strings.TrimPrefix(ref, "refs/remotes/")
+	return ref
+}
+
+// baseHint is a recovered fork base: a display name, a resolvable git ref,
+// and the method that found it (reflog | reflog-sha | upstream).
+type baseHint struct {
+	name, ref, from string
+}
+
+// reflogCreation returns the ref name and commit SHA recorded in a branch's
+// "Created from" reflog entry (the branch's creation event), or empty strings.
+func reflogCreation(repo, branch string) (ref, sha string) {
+	out, err := git(repo, "reflog", "show", branch)
+	if err != nil || out == "" {
+		return "", ""
+	}
+	const marker = ": branch: Created from "
+	for _, ln := range strings.Split(out, "\n") {
+		if i := strings.Index(ln, marker); i >= 0 {
+			ref = strings.TrimSpace(ln[i+len(marker):])
+			if f := strings.Fields(ln); len(f) > 0 {
+				sha = f[0]
+			}
+		}
+	}
+	return ref, sha
+}
+
+// nameRevBranch names a commit via `git name-rev`, restricted to branches, and
+// returns the branch it sits on with any ~N/^N suffix stripped. It returns
+// ok=false when the commit cannot be tied to a branch other than self.
+func nameRevBranch(repo, sha, selfBranch string) (string, bool) {
+	out, err := git(repo, "name-rev", "--name-only",
+		"--refs=refs/heads/*", "--refs=refs/remotes/*", sha)
+	if err != nil || out == "" || strings.Contains(out, "undefined") {
 		return "", false
 	}
-	out, err := git(repo, "reflog", "show", branch)
+	name := out
+	if i := strings.IndexAny(name, "~^"); i >= 0 {
+		name = name[:i]
+	}
+	name = strings.TrimPrefix(name, "remotes/")
+	if name == "" || name == selfBranch || strings.HasPrefix(name, "tags/") {
+		return "", false
+	}
+	if !gitOK(repo, "rev-parse", "--verify", "--quiet", name+"^{commit}") {
+		return "", false
+	}
+	return name, true
+}
+
+// upstreamOf returns a branch's configured upstream (e.g. "origin/main"), or "".
+func upstreamOf(repo, branch string) string {
+	out, err := git(repo, "for-each-ref", "--format=%(upstream:short)", "refs/heads/"+branch)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// isSelfRemote reports whether upstream is just the branch's own pushed copy
+// (<remote>/<branch>) rather than a distinct base branch.
+func isSelfRemote(repo, branch, upstream string) bool {
+	for _, r := range orderedRemotes(repo) {
+		if upstream == r+"/"+branch {
+			return true
+		}
+	}
+	return false
+}
+
+// detectBase recovers the ref a worktree branch was forked from. It tries, in
+// order: the reflog "Created from" ref (when it still names a branch); that
+// reflog entry's SHA, named via name-rev (handles "Created from HEAD" and
+// removed-remote refs); and finally the branch's upstream when it is a
+// distinct branch. It returns ok=false when nothing usable is found.
+func detectBase(repo, branch string) (baseHint, bool) {
+	if branch == "" {
+		return baseHint{}, false
+	}
+	createRef, createSHA := reflogCreation(repo, branch)
+
+	if createRef != "" && createRef != "HEAD" {
+		if full, err := git(repo, "rev-parse", "--symbolic-full-name", createRef); err == nil {
+			if strings.HasPrefix(full, "refs/heads/") || strings.HasPrefix(full, "refs/remotes/") {
+				return baseHint{createRef, createRef, "reflog"}, true
+			}
+		}
+	}
+	if createSHA != "" {
+		if n, ok := nameRevBranch(repo, createSHA, branch); ok {
+			return baseHint{n, n, "reflog-sha"}, true
+		}
+	}
+	if up := upstreamOf(repo, branch); up != "" && !isSelfRemote(repo, branch, up) {
+		if gitOK(repo, "rev-parse", "--verify", "--quiet", up+"^{commit}") {
+			return baseHint{up, up, "upstream"}, true
+		}
+	}
+	return baseHint{}, false
+}
+
+// containedElsewhere reports whether a worktree's HEAD is reachable from any
+// branch other than the worktree's own branch (or its pushed remote copy).
+// This catches work that was integrated into a branch other than its base.
+func containedElsewhere(repo, branch, head string) (string, bool) {
+	out, err := git(repo, "for-each-ref", "--contains", head,
+		"--format=%(refname)", "refs/heads", "refs/remotes")
 	if err != nil || out == "" {
 		return "", false
 	}
-	const marker = ": branch: Created from "
-	var ref string
-	for _, ln := range strings.Split(out, "\n") {
-		if i := strings.Index(ln, marker); i >= 0 {
-			ref = strings.TrimSpace(ln[i+len(marker):]) // last match = creation entry
+	skip := map[string]bool{"refs/heads/" + branch: true}
+	for _, r := range orderedRemotes(repo) {
+		skip["refs/remotes/"+r+"/"+branch] = true
+	}
+	var cands []string
+	for _, ref := range strings.Split(out, "\n") {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || skip[ref] || strings.HasSuffix(ref, "/HEAD") {
+			continue
+		}
+		cands = append(cands, ref)
+	}
+	if len(cands) == 0 {
+		return "", false
+	}
+	// Prefer a main/master branch for a stable, meaningful answer.
+	for _, ref := range cands {
+		if l := leaf(ref); l == "main" || l == "master" {
+			return shortRef(ref), true
 		}
 	}
-	if ref == "" || ref == "HEAD" {
-		return "", false
-	}
-	full, err := git(repo, "rev-parse", "--symbolic-full-name", ref)
-	if err != nil || full == "" {
-		return "", false // not a resolvable name (e.g. a bare SHA)
-	}
-	if !strings.HasPrefix(full, "refs/heads/") && !strings.HasPrefix(full, "refs/remotes/") {
-		return "", false
-	}
-	return ref, true
+	return shortRef(cands[0]), true
 }
 
 // orderedRemotes lists the repo's remotes with origin and upstream first,
@@ -134,8 +248,9 @@ func orderedRemotes(repo string) []string {
 
 // autoMainRef determines a repo's integration branch when no base could be
 // recovered for a worktree. When override is set it is used verbatim (after a
-// resolvability check); otherwise detection tries, in order: a local
-// main/master, each remote's HEAD, then each remote's main/master.
+// resolvability check). Otherwise detection prefers each remote's HEAD first —
+// that is what Claude Code's worktree creation forks from — then a local
+// main/master, then any remote main/master.
 func autoMainRef(repo, override string) (name, ref string, err error) {
 	if override != "" {
 		if gitOK(repo, "rev-parse", "--verify", "--quiet", override+"^{commit}") {
@@ -144,17 +259,16 @@ func autoMainRef(repo, override string) (name, ref string, err error) {
 		return "", "", errors.New("base ref " + override + " not found in repo")
 	}
 
-	for _, b := range []string{"main", "master"} {
-		if gitOK(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+b) {
-			return b, "refs/heads/" + b, nil
-		}
-	}
-
 	remotes := orderedRemotes(repo)
 	for _, rm := range remotes {
 		head, e := git(repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+rm+"/HEAD")
 		if e == nil && gitOK(repo, "rev-parse", "--verify", "--quiet", "refs/remotes/"+head) {
 			return head, "refs/remotes/" + head, nil
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if gitOK(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+b) {
+			return b, "refs/heads/" + b, nil
 		}
 	}
 	for _, rm := range remotes {

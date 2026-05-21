@@ -1,8 +1,8 @@
 # stale-worktrees
 
 Finds Claude Code worktree directories (`.claude/worktrees/*`) under a path and
-tells you which ones are safe to delete — i.e. whose branch is already merged
-into the branch it was forked from. Optionally reaps the merged ones.
+tells you which ones are safe to delete — i.e. whose work is already
+integrated into another branch. Optionally reaps them.
 
 ## Build & run
 
@@ -28,7 +28,7 @@ stale-worktrees [flags] [path]
 | `-size`     | measure each worktree's disk usage                                |
 | `-base REF` | test every worktree against `REF` instead of its own base         |
 | `-json`     | emit JSON instead of a table                                      |
-| `-prune`    | remove worktrees whose branch is merged into its base             |
+| `-prune`    | remove worktrees whose work is merged                             |
 | `-force`    | with `-prune`, also remove merged worktrees with uncommitted edits |
 
 ### Examples
@@ -47,40 +47,47 @@ stale-worktrees -json ~/projects              # machine-readable output
    skipped; a worktrees dir is not descended into, so nested fixtures are not
    double-counted. A child that is not actually a git worktree is reported as
    an error rather than silently dropped.
-2. **Classify** — for each worktree it reads the checked-out branch and HEAD,
-   resolves the **base** (below), and runs
-   `git merge-base --is-ancestor HEAD <base>`. If HEAD is an ancestor, the
-   branch is **merged**; otherwise **unmerged**. A `*` marks uncommitted changes.
+2. **Classify** — a worktree counts as **merged** if either:
+   - its HEAD is an ancestor of its **base** branch
+     (`git merge-base --is-ancestor`); or
+   - its HEAD is contained in **any branch other than its own**
+     (`git for-each-ref --contains`) — this catches work that landed on a
+     branch other than the base.
+
+   A `*` marks uncommitted changes. `merged -> REF` means the work was found in
+   `REF`, a branch other than the worktree's own base.
 
 ### Base detection
 
-By default each worktree is tested against **the branch it was forked from**,
-not a fixed `main`. The base is resolved in this order:
+By default each worktree is tested against **the branch it was forked from**.
+The base is recovered in this order, and the `BASE` column suffix shows which
+step succeeded:
 
-1. **`-base REF`** — if given, every worktree is tested against `REF`.
-2. **Reflog** — the ref recorded in the branch's `Created from` reflog entry
-   (`git worktree add` / `git branch` writes this at creation).
-3. **Auto** — if the reflog is gone or says `Created from HEAD`, the repo's
-   `main`/`master` is used (walking remotes, `origin`/`upstream` first).
+| Source        | Suffix       | How                                              |
+|---------------|--------------|--------------------------------------------------|
+| `-base REF`   | `(flag)`     | explicit override, applied to every worktree     |
+| reflog ref    | *(none)*     | the branch's `Created from <ref>` reflog entry   |
+| reflog SHA    | `(sha)`      | that reflog entry's commit, named via `name-rev` |
+| upstream      | `(upstream)` | the branch's configured upstream branch          |
+| auto          | `(auto)`     | the repo's main branch (remote `HEAD` preferred) |
 
-The `BASE` column shows the ref used. `(auto)` means the base could not be
-recovered and a main branch was substituted; `(flag)` means `-base` was given.
-No suffix means the base came straight from the reflog.
+The reflog-SHA step recovers a base even when the reflog ref is the unhelpful
+literal `HEAD`, or names a remote that has since been removed — the commit SHA
+in the reflog entry is stable where the ref name is not.
 
-Testing against the true base catches work that landed on a branch other than
-`main` — e.g. a commit pushed to `origin/main` while the local `main` lagged
-behind would be missed by a fixed-`main` check but is correctly seen as merged.
+When no base can be recovered at all, the base is left blank (`-`) and the
+verdict comes from the contains check alone.
 
-### Caveat: squash and rebase merges
+### Caveats
 
-The merge check is ancestry-based. A branch that was **squash-merged** or
-**rebased** onto its base will show as `unmerged`, because its original commits
-are not ancestors of the base tip. Treat `unmerged` as "not *fast-forward*
-merged"; verify by hand before force-pruning such branches.
+- **Squash / rebase merges.** Both checks are reachability-based. A branch that
+  was squash-merged or rebased onto its target shows as `unmerged`, because its
+  original commits are not present there. Verify by hand before force-pruning.
+- **Sibling worktrees.** If two worktrees share commits, each may report the
+  other's branch as containing its work. Check `merged -> REF` before pruning.
 
 ## Pruning
 
 `-prune` runs `git worktree remove` on every **merged** worktree. Unmerged
-worktrees, and any whose base could not be determined, are always kept.
-A merged worktree with uncommitted changes is skipped unless `-force` is given.
-Exit status is non-zero if any removal failed.
+worktrees are always kept. A merged worktree with uncommitted changes is
+skipped unless `-force` is given. Exit status is non-zero if any removal failed.
