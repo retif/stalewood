@@ -18,6 +18,7 @@ func main() {
 	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that have uncommitted changes")
 	jsonOut := flag.Bool("json", false, "emit JSON instead of a table")
 	withSize := flag.Bool("size", false, "measure each worktree's disk usage")
+	mainBranch := flag.String("main", "", "branch/ref to test merge against (default: auto-detect)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -42,7 +43,7 @@ func main() {
 	measure := *withSize || *prune
 	wts := make([]Worktree, len(paths))
 	for i, p := range paths {
-		wts[i] = analyze(p, measure)
+		wts[i] = analyze(p, measure, *mainBranch)
 	}
 
 	if *prune {
@@ -64,15 +65,17 @@ Usage:
   path   directory tree to scan (default ".")
 
 Flags:
-  -prune    remove worktrees whose branch is merged into main
-  -force    with -prune, also remove merged worktrees with uncommitted changes
-  -size     measure each worktree's disk usage
-  -json     emit JSON instead of a table
+  -prune        remove worktrees whose branch is merged into main
+  -force        with -prune, also remove merged worktrees with uncommitted changes
+  -size         measure each worktree's disk usage
+  -main REF     branch/ref to test merge against (default: auto-detect)
+  -json         emit JSON instead of a table
 
 Examples:
-  stale-worktrees ~/projects              # report
-  stale-worktrees -size ~/projects        # report with disk usage
-  stale-worktrees -prune ~/projects       # remove merged worktrees
+  stale-worktrees ~/projects               # report
+  stale-worktrees -size ~/projects         # report with disk usage
+  stale-worktrees -main develop ~/repo     # check against a non-default branch
+  stale-worktrees -prune ~/projects        # remove merged worktrees
 `)
 }
 
@@ -136,10 +139,10 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 	}
 	tw.Flush()
 
-	fmt.Printf("\n%d worktree(s) in %d repo(s) · %d merged · %d unmerged",
+	fmt.Printf("\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged",
 		len(wts), countRepos(wts), merged, unmerged)
 	if errored > 0 {
-		fmt.Printf(" · %d error", errored)
+		fmt.Printf(" - %d error", errored)
 	}
 	fmt.Println()
 	if merged > 0 {
@@ -147,7 +150,7 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if reclaimable > 0 {
 			hint = fmt.Sprintf(" (~%s)", humanSize(reclaimable))
 		}
-		fmt.Printf("%d worktree(s) are merged and removable%s — run with -prune to reap them.\n", merged, hint)
+		fmt.Printf("%d worktree(s) are merged and removable%s - run with -prune to reap them.\n", merged, hint)
 	}
 }
 
@@ -235,17 +238,16 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 			if a.Action == "kept" {
 				continue // unmerged worktrees are the normal case; stay quiet
 			}
-			mark := map[string]string{"removed": "removed", "skipped": "skipped", "failed": "FAILED "}[a.Action]
-			line := fmt.Sprintf("  %s  %s/%s", mark, repoLabel(root, a.Repo), a.Name)
+			line := fmt.Sprintf("  %-8s %s/%s", a.Action, repoLabel(root, a.Repo), a.Name)
 			if a.Reason != "" {
 				line += "  (" + a.Reason + ")"
 			}
 			fmt.Println(line)
 		}
-		fmt.Printf("\nremoved %d · skipped %d · failed %d · kept %d unmerged",
+		fmt.Printf("\nremoved %d - skipped %d - failed %d - kept %d unmerged",
 			removed, skipped, failed, kept)
 		if freed > 0 {
-			fmt.Printf(" · reclaimed ~%s", humanSize(freed))
+			fmt.Printf(" - reclaimed ~%s", humanSize(freed))
 		}
 		fmt.Println()
 	}

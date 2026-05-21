@@ -24,6 +24,7 @@ type Worktree struct {
 }
 
 // Status is a short human-readable classification for table output.
+// A trailing "*" marks a worktree with uncommitted changes.
 func (w *Worktree) Status() string {
 	switch {
 	case w.Err != "":
@@ -40,7 +41,7 @@ func (w *Worktree) Status() string {
 }
 
 // Prunable reports whether the worktree's branch is fully merged and so the
-// worktree is safe to remove. A "*" (dirty) worktree is prunable only with force.
+// worktree is safe to remove. A dirty merged worktree is prunable only with force.
 func (w *Worktree) Prunable() bool {
 	return w.Err == "" && w.Merged
 }
@@ -100,8 +101,9 @@ func collectWorktrees(root string) ([]string, error) {
 }
 
 // analyze inspects a single worktree directory and classifies it against its
-// repo's main branch. withSize controls whether disk usage is measured.
-func analyze(path string, withSize bool) Worktree {
+// repo's main branch. withSize controls whether disk usage is measured;
+// mainOverride, when non-empty, forces the ref the merge check runs against.
+func analyze(path string, withSize bool, mainOverride string) Worktree {
 	w := Worktree{Path: path, Name: filepath.Base(path), SizeBytes: -1}
 	// repo root: <repo>/.claude/worktrees/<name> -> up three levels.
 	w.Repo = filepath.Dir(filepath.Dir(filepath.Dir(path)))
@@ -127,7 +129,7 @@ func analyze(path string, withSize bool) Worktree {
 	w.Detached = w.Branch == ""
 	w.Dirty = isDirty(path)
 
-	name, ref, err := resolveMainRef(w.Repo)
+	name, ref, err := resolveMainRef(w.Repo, mainOverride)
 	if err != nil {
 		w.Err = err.Error()
 		return w
