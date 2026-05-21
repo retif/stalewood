@@ -1,7 +1,7 @@
-// Command stale-worktrees scans a directory tree for Claude Code worktrees
-// (".claude/worktrees/*") and reports, for each one, whether its work is
-// already integrated — merged into the branch it was forked from, or present
-// in any other branch. With -prune it removes the worktrees that are merged.
+// Command stale-worktrees scans a directory tree for git worktrees — Claude
+// Code worktrees under ".claude/worktrees/*", linked worktrees from
+// `git worktree list`, and abandoned ones — and reports, for each, whether its
+// work is already integrated. With -prune it removes the merged ones.
 package main
 
 import (
@@ -15,7 +15,7 @@ import (
 
 func main() {
 	prune := flag.Bool("prune", false, "remove worktrees whose work is merged")
-	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that have uncommitted changes")
+	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that are dirty or locked")
 	jsonOut := flag.Bool("json", false, "emit JSON instead of a table")
 	withSize := flag.Bool("size", false, "measure each worktree's disk usage")
 	base := flag.String("base", "", "ref to test every worktree against (default: per-worktree base)")
@@ -34,16 +34,15 @@ func main() {
 		fatal(fmt.Errorf("%s: not a directory", root))
 	}
 
-	paths, err := collectWorktrees(abs)
+	wts, err := discoverWorktrees(abs)
 	if err != nil {
 		fatal(err)
 	}
 
 	// Pruning needs sizes so it can report reclaimed space.
 	measure := *withSize || *prune
-	wts := make([]Worktree, len(paths))
-	for i, p := range paths {
-		wts[i] = analyze(p, measure, *base)
+	for i := range wts {
+		analyze(&wts[i], measure, *base)
 	}
 
 	if *prune {
@@ -57,33 +56,32 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `stale-worktrees - find and reap merged Claude Code worktrees
+	fmt.Fprint(os.Stderr, `stale-worktrees - find and reap merged git worktrees
 
 Usage:
   stale-worktrees [flags] [path]
 
   path   directory tree to scan (default ".")
 
-A worktree counts as merged if its HEAD is an ancestor of its base branch, or
-if HEAD is contained in any branch other than its own. The base is recovered
-per-worktree from the reflog (creation ref, then creation SHA via name-rev),
-then the branch's upstream; failing all that, the repo's main branch is used.
+Worktrees are discovered from three sources, unioned: directories under
+.claude/worktrees, `+"`git worktree list`"+` of every repo found, and abandoned
+worktrees (orphan directories git forgot, and stale entries whose dir is gone).
+
+A live worktree counts as merged if its HEAD is an ancestor of its base
+branch, or if HEAD is contained in any branch other than its own. The base is
+recovered per-worktree from the reflog, then the branch's upstream; failing
+that, the repo's main branch is used.
 
 Flags:
   -prune        remove worktrees whose work is merged
-  -force        with -prune, also remove merged worktrees with uncommitted changes
+  -force        with -prune, also remove merged worktrees that are dirty/locked
   -size         measure each worktree's disk usage
   -base REF     test every worktree against REF instead of its own base
   -json         emit JSON instead of a table
 
-In the table, the BASE column suffix shows how the base was found:
-  (no suffix)  recovered from the reflog
-  (sha)        recovered from the reflog creation SHA via name-rev
-  (upstream)   the branch's upstream branch
-  (auto)       fell back to the repo's main/master branch
-  (flag)       supplied via -base
-A "merged -> REF" status means the work was found in REF, a branch other than
-the worktree's own base.
+Abandoned worktrees are reported with a suggested fix but never removed by
+-prune. The BASE column suffix shows how the base was found: (sha), (upstream),
+(auto), (flag), or no suffix for a plain reflog hit.
 
 Examples:
   stale-worktrees -size ~/projects             # report, with disk usage
@@ -99,6 +97,9 @@ func fatal(err error) {
 
 // repoLabel renders a repo path relative to the scan root for compact display.
 func repoLabel(root, repo string) string {
+	if repo == "" {
+		return "?"
+	}
 	if rel, err := filepath.Rel(root, repo); err == nil && rel != "." {
 		return rel
 	}
@@ -124,22 +125,41 @@ func baseLabel(w Worktree) string {
 	}
 }
 
-// statusLabel renders the STATUS cell, annotating where merged work was found
-// when that is a branch other than the worktree's own base.
+// statusLabel renders the STATUS cell for a worktree.
 func statusLabel(w Worktree) string {
 	if w.Err != "" {
 		return "error: " + w.Err
 	}
+	switch w.Kind {
+	case "abandoned-orphan":
+		return "abandoned (orphan dir)"
+	case "abandoned-stale":
+		return "abandoned (stale entry)"
+	}
 	s := w.Status()
+	if w.Locked {
+		s += " [locked]"
+	}
 	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
 		s += " -> " + w.MergedInto
 	}
 	return s
 }
 
+// abandonedFix returns the suggested manual cleanup for an abandoned worktree.
+func abandonedFix(w Worktree) string {
+	switch w.Kind {
+	case "abandoned-stale":
+		return "stale entry; clear with `git -C <repo> worktree prune`"
+	case "abandoned-orphan":
+		return "orphan dir; git untracked, remove by hand if unwanted"
+	}
+	return ""
+}
+
 func emitTable(root string, wts []Worktree, withSize bool) {
 	if len(wts) == 0 {
-		fmt.Println("No .claude/worktrees found under", root)
+		fmt.Println("No worktrees found under", root)
 		return
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -149,12 +169,14 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 	}
 	fmt.Fprintln(tw, header)
 
-	var merged, unmerged, errored int
+	var merged, unmerged, abandoned, errored int
 	var reclaimable int64
 	for _, w := range wts {
 		switch {
 		case w.Err != "":
 			errored++
+		case w.Kind != "live":
+			abandoned++
 		case w.Merged:
 			merged++
 			if w.SizeBytes > 0 {
@@ -164,6 +186,9 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 			unmerged++
 		}
 		branch := w.Branch
+		if branch == "" {
+			branch = "-"
+		}
 		if w.Detached {
 			branch = "(detached)"
 		}
@@ -176,8 +201,8 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 	}
 	tw.Flush()
 
-	fmt.Printf("\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged",
-		len(wts), countRepos(wts), merged, unmerged)
+	fmt.Printf("\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged - %d abandoned",
+		len(wts), countRepos(wts), merged, unmerged, abandoned)
 	if errored > 0 {
 		fmt.Printf(" - %d error", errored)
 	}
@@ -187,7 +212,10 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if reclaimable > 0 {
 			hint = fmt.Sprintf(" (~%s)", humanSize(reclaimable))
 		}
-		fmt.Printf("%d worktree(s) are merged and removable%s - run with -prune to reap them.\n", merged, hint)
+		fmt.Printf("%d merged worktree(s) removable%s - run with -prune to reap them.\n", merged, hint)
+	}
+	if abandoned > 0 {
+		fmt.Printf("%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
 	}
 }
 
@@ -220,7 +248,8 @@ type pruneAction struct {
 	Freed  int64  `json:"freed_bytes,omitempty"`
 }
 
-// runPrune removes every merged worktree and returns a process exit code.
+// runPrune removes every merged live worktree and returns a process exit code.
+// Abandoned worktrees are reported but never removed.
 func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 	var actions []pruneAction
 	var freed int64
@@ -229,6 +258,10 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 	for _, w := range wts {
 		a := pruneAction{Path: w.Path, Repo: w.Repo, Name: w.Name}
 		switch {
+		case w.Kind != "live":
+			a.Action = "kept"
+			a.Reason = abandonedFix(w)
+			kept++
 		case !w.Prunable():
 			a.Action = "kept"
 			if w.Err != "" {
@@ -237,12 +270,16 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 				a.Reason = "not merged"
 			}
 			kept++
-		case w.Dirty && !force:
+		case (w.Dirty || w.Locked) && !force:
 			a.Action = "skipped"
-			a.Reason = "uncommitted changes (rerun with -force)"
+			if w.Dirty {
+				a.Reason = "uncommitted changes (rerun with -force)"
+			} else {
+				a.Reason = "locked (rerun with -force)"
+			}
 			skipped++
 		default:
-			if err := removeWorktree(w.Repo, w.Path, w.Dirty); err != nil {
+			if err := removeWorktree(w.Repo, w.Path, w.Dirty || w.Locked); err != nil {
 				a.Action = "failed"
 				a.Reason = err.Error()
 				failed++
@@ -273,7 +310,7 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 	} else {
 		for _, a := range actions {
 			if a.Action == "kept" {
-				continue // unmerged worktrees are the normal case; stay quiet
+				continue // unmerged / abandoned are the normal case; stay quiet
 			}
 			line := fmt.Sprintf("  %-8s %s/%s", a.Action, repoLabel(root, a.Repo), a.Name)
 			if a.Reason != "" {
@@ -281,7 +318,7 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 			}
 			fmt.Println(line)
 		}
-		fmt.Printf("\nremoved %d - skipped %d - failed %d - kept %d unmerged",
+		fmt.Printf("\nremoved %d - skipped %d - failed %d - kept %d",
 			removed, skipped, failed, kept)
 		if freed > 0 {
 			fmt.Printf(" - reclaimed ~%s", humanSize(freed))

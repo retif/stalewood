@@ -5,18 +5,25 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
-// Worktree is one Claude Code worktree dir plus its analysis: which branch it
-// was forked from, and whether its work is already integrated elsewhere.
+// Worktree is one linked git worktree plus its analysis: how it was
+// discovered, which branch it was forked from, and whether its work is
+// already integrated elsewhere.
 type Worktree struct {
 	Path       string `json:"path"`                  // absolute path to the worktree dir
 	Repo       string `json:"repo"`                  // absolute path to the owning repo root
 	Name       string `json:"name"`                  // basename of the worktree dir
+	Kind       string `json:"kind"`                  // live | abandoned-orphan | abandoned-stale
+	Claude     bool   `json:"claude"`                // lives under a .claude/worktrees/ path
+	Registered bool   `json:"registered"`            // listed by `git worktree list`
+	OnDisk     bool   `json:"on_disk"`               // the directory exists
+	Locked     bool   `json:"locked,omitempty"`      // git worktree lock is set
 	Branch     string `json:"branch"`                // checked-out branch ("" when detached)
 	Head       string `json:"head"`                  // short HEAD sha
 	Base       string `json:"base"`                  // recovered fork base ("" when unknown)
-	BaseFrom   string `json:"base_from"`             // how Base was chosen
+	BaseFrom   string `json:"base_from,omitempty"`   // how Base was chosen
 	Merged     bool   `json:"merged"`                // work is integrated (see MergedInto)
 	MergedInto string `json:"merged_into,omitempty"` // ref the work was found in
 	Dirty      bool   `json:"dirty"`                 // has uncommitted changes
@@ -25,8 +32,8 @@ type Worktree struct {
 	Err        string `json:"error,omitempty"`
 }
 
-// Status is a short human-readable classification for table output.
-// A trailing "*" marks a worktree with uncommitted changes.
+// Status is a short classification for a live worktree.
+// A trailing "*" marks uncommitted changes.
 func (w *Worktree) Status() string {
 	switch {
 	case w.Err != "":
@@ -42,41 +49,29 @@ func (w *Worktree) Status() string {
 	}
 }
 
-// Prunable reports whether the worktree's work is integrated and so the
-// worktree is safe to remove. A dirty merged worktree is prunable only with force.
+// Prunable reports whether `git worktree remove` should run on this worktree:
+// a live worktree whose work is merged. Abandoned worktrees are never prunable
+// (they are report-only).
 func (w *Worktree) Prunable() bool {
-	return w.Err == "" && w.Merged
+	return w.Err == "" && w.Kind == "live" && w.Merged
+}
+
+// kindOf classifies a worktree by how it was discovered.
+func kindOf(w *Worktree) string {
+	switch {
+	case w.Registered && w.OnDisk:
+		return "live"
+	case w.Registered && !w.OnDisk:
+		return "abandoned-stale" // git tracks it, the directory is gone
+	default:
+		return "abandoned-orphan" // on disk, git no longer tracks it
+	}
 }
 
 // skipDirs are never descended into during the scan.
 var skipDirs = map[string]bool{
 	"node_modules": true,
 	".git":         true,
-}
-
-// findWorktreesDirs walks root and returns every ".claude/worktrees" directory.
-// It does not descend into a worktrees dir once found, so nested test fixtures
-// or worktrees-within-worktrees are not double-counted.
-func findWorktreesDirs(root string) ([]string, error) {
-	var found []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // unreadable entry: skip, keep walking
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if skipDirs[d.Name()] {
-			return fs.SkipDir
-		}
-		if d.Name() == "worktrees" && filepath.Base(filepath.Dir(p)) == ".claude" {
-			found = append(found, p)
-			return fs.SkipDir
-		}
-		return nil
-	})
-	sort.Strings(found)
-	return found, err
 }
 
 // hasGitEntry reports whether path has its own ".git" entry — a file for a
@@ -88,80 +83,217 @@ func hasGitEntry(path string) bool {
 	return err == nil
 }
 
-// collectWorktrees finds every worktrees dir under root and returns the
-// immediate child directories that are worktrees — i.e. that carry their own
-// ".git" entry. Plain directories that only happen to sit under a
-// .claude/worktrees path are skipped.
-func collectWorktrees(root string) ([]string, error) {
-	dirs, err := findWorktreesDirs(root)
+// underClaudeWorktrees reports whether path is an immediate child of a
+// ".claude/worktrees" directory.
+func underClaudeWorktrees(path string) bool {
+	d := filepath.Dir(path)
+	return filepath.Base(d) == "worktrees" && filepath.Base(filepath.Dir(d)) == ".claude"
+}
+
+// walkTree walks root once, collecting directories that carry a .git entry
+// (working trees, to resolve into repos) and every ".claude/worktrees"
+// directory (to enumerate Claude Code worktrees and orphans).
+func walkTree(root string) (gitDirs, claudeDirs []string, err error) {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, e error) error {
+		if e != nil {
+			return nil // unreadable entry: skip, keep walking
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if skipDirs[d.Name()] {
+			return fs.SkipDir
+		}
+		if d.Name() == "worktrees" && filepath.Base(filepath.Dir(p)) == ".claude" {
+			claudeDirs = append(claudeDirs, p)
+			return fs.SkipDir // children handled separately; don't double-count
+		}
+		if hasGitEntry(p) {
+			gitDirs = append(gitDirs, p)
+		}
+		return nil
+	})
+	return gitDirs, claudeDirs, err
+}
+
+// repoRootOf turns a common git dir into the repo's working-tree root.
+func repoRootOf(commonDir string) string {
+	if filepath.Base(commonDir) == ".git" {
+		return filepath.Dir(commonDir)
+	}
+	return commonDir // bare repo
+}
+
+// dirExists reports whether path is an existing directory.
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+// orphanRepoRoot best-effort recovers the repo an orphan worktree belonged to,
+// by reading its .git file, then falling back to the .claude/worktrees layout.
+func orphanRepoRoot(worktreeDir string) string {
+	if b, err := os.ReadFile(filepath.Join(worktreeDir, ".git")); err == nil {
+		s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(b)), "gitdir:"))
+		if i := strings.Index(s, "/.git/worktrees/"); i >= 0 {
+			return s[:i]
+		}
+	}
+	if underClaudeWorktrees(worktreeDir) {
+		return filepath.Dir(filepath.Dir(filepath.Dir(worktreeDir)))
+	}
+	return ""
+}
+
+// discoverWorktrees walks root and returns every linked worktree it can find,
+// from three sources unioned together: directories under .claude/worktrees,
+// `git worktree list` of every repo found, and abandoned worktrees (orphan
+// directories and stale git entries). Discovery fields are filled in;
+// merge analysis is left to analyze.
+func discoverWorktrees(root string) ([]Worktree, error) {
+	gitDirs, claudeDirs, err := walkTree(root)
 	if err != nil {
 		return nil, err
 	}
-	var wts []string
-	for _, d := range dirs {
-		entries, e := os.ReadDir(d)
+
+	repos := map[string]string{} // common git dir -> a working dir inside that repo
+	orphans := map[string]bool{} // worktree dirs whose backing git dir is gone
+
+	consider := func(dir string) {
+		if cd, ok := commonGitDir(dir); ok {
+			if _, seen := repos[cd]; !seen {
+				repos[cd] = dir
+			}
+			return
+		}
+		orphans[dir] = true // a .git entry that no longer resolves
+	}
+	for _, d := range gitDirs {
+		consider(d)
+	}
+
+	// .claude/worktrees children: the walk does not descend into them.
+	claudeChildren := map[string]bool{}
+	for _, cwd := range claudeDirs {
+		ents, e := os.ReadDir(cwd)
 		if e != nil {
 			continue
 		}
-		for _, ent := range entries {
+		for _, ent := range ents {
 			if !ent.IsDir() {
 				continue
 			}
-			child := filepath.Join(d, ent.Name())
-			if hasGitEntry(child) {
-				wts = append(wts, child)
+			child := filepath.Join(cwd, ent.Name())
+			if !hasGitEntry(child) {
+				continue // a plain directory / committed fixture, not a worktree
+			}
+			abs, _ := filepath.Abs(child)
+			claudeChildren[abs] = true
+			consider(child)
+		}
+	}
+
+	result := map[string]*Worktree{}
+
+	// Source: `git worktree list` of every repo found.
+	for cd, anyDir := range repos {
+		entries, e := listWorktrees(anyDir)
+		if e != nil {
+			continue
+		}
+		repoRoot := repoRootOf(cd)
+		for _, en := range entries {
+			if en.Bare {
+				continue
+			}
+			abs, _ := filepath.Abs(en.Path)
+			result[abs] = &Worktree{
+				Path: abs, Name: filepath.Base(abs), Repo: repoRoot,
+				Branch: en.Branch, Head: short(en.Head), Detached: en.Detached,
+				Registered: true, Locked: en.Locked, OnDisk: dirExists(abs),
+				SizeBytes: -1,
 			}
 		}
 	}
-	sort.Strings(wts)
-	return wts, nil
-}
 
-// analyze inspects a single worktree directory and decides whether its work is
-// integrated. withSize controls whether disk usage is measured. baseOverride,
-// when non-empty, forces the ref the merge check runs against.
-//
-// A worktree counts as merged if its HEAD is an ancestor of its base, OR if
-// HEAD is contained in some branch other than its own. The base is recovered
-// per-worktree (reflog, then name-rev, then upstream); when it cannot be
-// recovered the base is left blank but the contains check still gives a verdict.
-func analyze(path string, withSize bool, baseOverride string) Worktree {
-	w := Worktree{Path: path, Name: filepath.Base(path), SizeBytes: -1}
-	// repo root: <repo>/.claude/worktrees/<name> -> up three levels.
-	w.Repo = filepath.Dir(filepath.Dir(filepath.Dir(path)))
-
-	if withSize {
-		if sz, err := dirSize(path); err == nil {
-			w.SizeBytes = sz
+	// Source: orphan worktree directories (on disk, git no longer tracks them).
+	for od := range orphans {
+		abs, _ := filepath.Abs(od)
+		if _, ok := result[abs]; ok {
+			continue
+		}
+		result[abs] = &Worktree{
+			Path: abs, Name: filepath.Base(abs), Repo: orphanRepoRoot(abs),
+			OnDisk: true, SizeBytes: -1,
 		}
 	}
 
-	if !isLinkedWorktree(path) {
-		w.Err = "not a git worktree"
-		return w
+	// Tag worktrees that are Claude Code worktrees.
+	for abs := range claudeChildren {
+		if w, ok := result[abs]; ok {
+			w.Claude = true
+		}
+	}
+	for p, w := range result {
+		if underClaudeWorktrees(p) {
+			w.Claude = true
+		}
 	}
 
-	head, err := headOf(path)
+	out := make([]Worktree, 0, len(result))
+	for _, w := range result {
+		w.Kind = kindOf(w)
+		out = append(out, *w)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
+}
+
+// analyze fills in the merge analysis for a worktree discovered by
+// discoverWorktrees. withSize controls whether disk usage is measured.
+// baseOverride, when non-empty, forces the ref the merge check runs against.
+// Abandoned worktrees carry no merge analysis — there is nothing to integrate.
+//
+// A live worktree counts as merged if its HEAD is an ancestor of its base, OR
+// if HEAD is contained in some branch other than its own. The base is
+// recovered per-worktree (reflog, then name-rev, then upstream); when it
+// cannot be recovered the base is left blank but the contains check still
+// gives a verdict.
+func analyze(w *Worktree, withSize bool, baseOverride string) {
+	if withSize && w.OnDisk {
+		if sz, err := dirSize(w.Path); err == nil {
+			w.SizeBytes = sz
+		}
+	}
+	if w.Kind != "live" {
+		return
+	}
+	if !isLinkedWorktree(w.Path) {
+		w.Err = "not a git worktree"
+		return
+	}
+
+	head, err := headOf(w.Path)
 	if err != nil {
 		w.Err = err.Error()
-		return w
+		return
 	}
 	w.Head = short(head)
-	w.Branch = branchOf(path)
+	w.Branch = branchOf(w.Path)
 	w.Detached = w.Branch == ""
-	w.Dirty = isDirty(path)
+	w.Dirty = isDirty(w.Path)
 
 	name, ref, from, baseErr := resolveBase(w.Repo, w.Branch, baseOverride)
 	if baseErr != nil && baseOverride != "" {
 		w.Err = baseErr.Error() // a user-supplied base must resolve
-		return w
+		return
 	}
 	if baseErr == nil {
 		w.Base, w.BaseFrom = name, from
 		merged, e := isMerged(w.Repo, head, ref)
 		if e != nil {
 			w.Err = e.Error()
-			return w
+			return
 		}
 		if merged {
 			w.Merged, w.MergedInto = true, name
@@ -175,7 +307,6 @@ func analyze(path string, withSize bool, baseOverride string) Worktree {
 			w.Merged, w.MergedInto = true, cref
 		}
 	}
-	return w
 }
 
 // resolveBase picks the ref to test a worktree branch against. It returns a

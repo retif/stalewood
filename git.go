@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -50,6 +51,78 @@ func isLinkedWorktree(dir string) bool {
 		return false
 	}
 	return strings.Contains(strings.ReplaceAll(gd, "\\", "/"), "/worktrees/")
+}
+
+// commonGitDir returns the absolute shared git directory of the working tree
+// at dir (the repo's .git). ok is false when dir is not a usable working tree
+// — e.g. an orphan worktree whose backing git dir has been deleted.
+func commonGitDir(dir string) (string, bool) {
+	if out, err := git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && out != "" {
+		return filepath.Clean(out), true
+	}
+	out, err := git(dir, "rev-parse", "--git-common-dir")
+	if err != nil || out == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(out) {
+		out = filepath.Join(dir, out)
+	}
+	return filepath.Clean(out), true
+}
+
+// wtEntry is one linked worktree from `git worktree list --porcelain`.
+type wtEntry struct {
+	Path     string
+	Head     string
+	Branch   string // short name, "" when detached
+	Detached bool
+	Bare     bool
+	Locked   bool
+	Prunable bool
+}
+
+// listWorktrees parses `git worktree list --porcelain` for the repo containing
+// dir. The first record (the main working tree, or a bare repo) is dropped, so
+// only linked worktrees are returned.
+func listWorktrees(dir string) ([]wtEntry, error) {
+	out, err := git(dir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var all []wtEntry
+	var cur *wtEntry
+	flush := func() {
+		if cur != nil {
+			all = append(all, *cur)
+			cur = nil
+		}
+	}
+	for _, ln := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "worktree "):
+			flush()
+			cur = &wtEntry{Path: strings.TrimSpace(strings.TrimPrefix(ln, "worktree "))}
+		case cur == nil:
+			// between records
+		case ln == "bare":
+			cur.Bare = true
+		case ln == "detached":
+			cur.Detached = true
+		case strings.HasPrefix(ln, "HEAD "):
+			cur.Head = strings.TrimSpace(strings.TrimPrefix(ln, "HEAD "))
+		case strings.HasPrefix(ln, "branch "):
+			cur.Branch = shortRef(strings.TrimSpace(strings.TrimPrefix(ln, "branch ")))
+		case strings.HasPrefix(ln, "locked"):
+			cur.Locked = true
+		case strings.HasPrefix(ln, "prunable"):
+			cur.Prunable = true
+		}
+	}
+	flush()
+	if len(all) > 0 {
+		all = all[1:] // drop the main working tree / bare repo
+	}
+	return all, nil
 }
 
 // branchOf returns the checked-out branch of a worktree, or "" if detached.
@@ -169,7 +242,7 @@ func detectBase(repo, branch string) (baseHint, bool) {
 	if createRef != "" && createRef != "HEAD" {
 		if full, err := git(repo, "rev-parse", "--symbolic-full-name", createRef); err == nil {
 			if strings.HasPrefix(full, "refs/heads/") || strings.HasPrefix(full, "refs/remotes/") {
-				return baseHint{createRef, createRef, "reflog"}, true
+				return baseHint{shortRef(createRef), createRef, "reflog"}, true
 			}
 		}
 	}

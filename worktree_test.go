@@ -12,13 +12,8 @@ func TestHumanSize(t *testing.T) {
 		in   int64
 		want string
 	}{
-		{-1, "-"},
-		{0, "0B"},
-		{512, "512B"},
-		{1024, "1.0K"},
-		{1536, "1.5K"},
-		{5 * 1024 * 1024, "5.0M"},
-		{3 * 1024 * 1024 * 1024, "3.0G"},
+		{-1, "-"}, {0, "0B"}, {512, "512B"}, {1024, "1.0K"},
+		{1536, "1.5K"}, {5 * 1024 * 1024, "5.0M"}, {3 * 1024 * 1024 * 1024, "3.0G"},
 	}
 	for _, c := range cases {
 		if got := humanSize(c.in); got != c.want {
@@ -27,25 +22,21 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
-func TestStatusAndPrunable(t *testing.T) {
+func TestPrunable(t *testing.T) {
 	cases := []struct {
-		w        Worktree
-		status   string
-		prunable bool
+		w    Worktree
+		want bool
 	}{
-		{Worktree{Merged: true}, "merged", true},
-		{Worktree{Merged: true, Dirty: true}, "merged*", true},
-		{Worktree{}, "unmerged", false},
-		{Worktree{Dirty: true}, "unmerged*", false},
-		{Worktree{Err: "boom"}, "error", false},
-		{Worktree{Merged: true, Err: "boom"}, "error", false},
+		{Worktree{Kind: "live", Merged: true}, true},
+		{Worktree{Kind: "live", Merged: true, Dirty: true}, true},
+		{Worktree{Kind: "live"}, false},
+		{Worktree{Kind: "live", Merged: true, Err: "boom"}, false},
+		{Worktree{Kind: "abandoned-orphan", Merged: true}, false},
+		{Worktree{Kind: "abandoned-stale", Merged: true}, false},
 	}
 	for i, c := range cases {
-		if got := c.w.Status(); got != c.status {
-			t.Errorf("case %d: Status() = %q, want %q", i, got, c.status)
-		}
-		if got := c.w.Prunable(); got != c.prunable {
-			t.Errorf("case %d: Prunable() = %v, want %v", i, got, c.prunable)
+		if got := c.w.Prunable(); got != c.want {
+			t.Errorf("case %d: Prunable() = %v, want %v", i, got, c.want)
 		}
 	}
 }
@@ -74,9 +65,12 @@ func TestStatusLabel(t *testing.T) {
 		w    Worktree
 		want string
 	}{
-		{Worktree{Merged: true, Base: "main", MergedInto: "main"}, "merged"},
-		{Worktree{Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
-		{Worktree{}, "unmerged"},
+		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "main"}, "merged"},
+		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
+		{Worktree{Kind: "live"}, "unmerged"},
+		{Worktree{Kind: "live", Locked: true}, "unmerged [locked]"},
+		{Worktree{Kind: "abandoned-orphan"}, "abandoned (orphan dir)"},
+		{Worktree{Kind: "abandoned-stale"}, "abandoned (stale entry)"},
 		{Worktree{Err: "boom"}, "error: boom"},
 	}
 	for i, c := range cases {
@@ -124,6 +118,31 @@ func commit(t *testing.T, dir, file, msg string) {
 	run(t, dir, "git", "commit", "-q", "-m", msg)
 }
 
+func mkClaudeWorktrees(t *testing.T, repo string) string {
+	t.Helper()
+	d := filepath.Join(repo, ".claude", "worktrees")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// discoverAnalyzed discovers worktrees under root, runs analysis on each, and
+// returns them keyed by worktree name.
+func discoverAnalyzed(t *testing.T, root, base string) map[string]Worktree {
+	t.Helper()
+	wts, err := discoverWorktrees(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]Worktree{}
+	for i := range wts {
+		analyze(&wts[i], false, base)
+		m[wts[i].Name] = wts[i]
+	}
+	return m
+}
+
 // TestScanAndAnalyze builds a repo with a merged worktree and an
 // unmerged-dirty worktree and verifies detection end to end.
 func TestScanAndAnalyze(t *testing.T) {
@@ -132,17 +151,11 @@ func TestScanAndAnalyze(t *testing.T) {
 	}
 	root := t.TempDir()
 	repo := initRepo(t, root, "myrepo")
-	wtDir := filepath.Join(repo, ".claude", "worktrees")
-	if err := os.MkdirAll(wtDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	wtDir := mkClaudeWorktrees(t, repo)
 
-	// Merged worktree: forked from main, no commits ahead.
 	mergedWT := filepath.Join(wtDir, "merged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-merged", mergedWT, "main")
 
-	// Unmerged + dirty worktree: a commit ahead of main, plus an
-	// uncommitted edit on top.
 	unmergedWT := filepath.Join(wtDir, "unmerged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-unmerged", unmergedWT, "main")
 	commit(t, unmergedWT, "new.txt", "ahead")
@@ -150,47 +163,36 @@ func TestScanAndAnalyze(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths, err := collectWorktrees(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) != 2 {
-		t.Fatalf("collectWorktrees found %d worktrees, want 2: %v", len(paths), paths)
-	}
-
-	got := map[string]Worktree{}
-	for _, p := range paths {
-		w := analyze(p, true, "")
-		got[w.Name] = w
+	got := discoverAnalyzed(t, root, "")
+	if len(got) != 2 {
+		t.Fatalf("discovered %d worktrees, want 2: %v", len(got), got)
 	}
 
 	m := got["merged"]
 	if m.Err != "" {
 		t.Fatalf("merged worktree errored: %s", m.Err)
 	}
-	if !m.Merged || m.Dirty {
-		t.Errorf("merged worktree: Merged=%v Dirty=%v, want true/false", m.Merged, m.Dirty)
+	if m.Kind != "live" || !m.Claude || !m.Registered || !m.OnDisk {
+		t.Errorf("merged: kind=%q claude=%v registered=%v onDisk=%v",
+			m.Kind, m.Claude, m.Registered, m.OnDisk)
 	}
-	if m.Branch != "feat-merged" {
-		t.Errorf("merged worktree: Branch = %q, want feat-merged", m.Branch)
+	if !m.Merged || m.Dirty || m.Branch != "feat-merged" {
+		t.Errorf("merged: Merged=%v Dirty=%v Branch=%q", m.Merged, m.Dirty, m.Branch)
 	}
 	if m.Base != "main" || m.BaseFrom != "reflog" || m.MergedInto != "main" {
-		t.Errorf("merged worktree: base=%q from=%q into=%q, want main/reflog/main",
+		t.Errorf("merged: base=%q from=%q into=%q, want main/reflog/main",
 			m.Base, m.BaseFrom, m.MergedInto)
 	}
 	if !m.Prunable() {
-		t.Errorf("merged worktree: Prunable = false, want true")
+		t.Errorf("merged: Prunable = false, want true")
 	}
 
 	u := got["unmerged"]
 	if u.Err != "" {
 		t.Fatalf("unmerged worktree errored: %s", u.Err)
 	}
-	if u.Merged || !u.Dirty {
-		t.Errorf("unmerged worktree: Merged=%v Dirty=%v, want false/true", u.Merged, u.Dirty)
-	}
-	if u.Prunable() {
-		t.Errorf("unmerged worktree: Prunable = true, want false")
+	if u.Merged || !u.Dirty || u.Prunable() {
+		t.Errorf("unmerged: Merged=%v Dirty=%v Prunable=%v", u.Merged, u.Dirty, u.Prunable())
 	}
 }
 
@@ -202,16 +204,12 @@ func TestContainsMerge(t *testing.T) {
 	}
 	root := t.TempDir()
 	repo := initRepo(t, root, "r")
-	wt := filepath.Join(repo, ".claude", "worktrees", "w")
-	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "w")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "wt", wt, "main")
 	commit(t, wt, "f.txt", "wt work")
-	// A separate branch that also contains the worktree's commit.
 	run(t, repo, "git", "branch", "release", "wt")
 
-	w := analyze(wt, false, "")
+	w := discoverAnalyzed(t, root, "")["w"]
 	if w.Err != "" {
 		t.Fatalf("errored: %s", w.Err)
 	}
@@ -223,24 +221,19 @@ func TestContainsMerge(t *testing.T) {
 	}
 }
 
-// TestBaseFromCreationSHA verifies that a branch created from a bare "HEAD"
-// still has its base recovered, via the reflog creation SHA and name-rev.
+// TestBaseFromCreationSHA verifies a branch created from a bare "HEAD" still
+// has its base recovered, via the reflog creation SHA and name-rev.
 func TestBaseFromCreationSHA(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
 	root := t.TempDir()
 	repo := initRepo(t, root, "r")
-	wt := filepath.Join(repo, ".claude", "worktrees", "w")
-	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// No start point: the branch is created from HEAD, so the reflog ref is
-	// the unhelpful literal "HEAD" -- recovery must fall back to the SHA.
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "w")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "fromhead", wt)
 	commit(t, wt, "f.txt", "ahead")
 
-	w := analyze(wt, false, "")
+	w := discoverAnalyzed(t, root, "")["w"]
 	if w.Err != "" {
 		t.Fatalf("errored: %s", w.Err)
 	}
@@ -257,13 +250,10 @@ func TestBaseOverride(t *testing.T) {
 	root := t.TempDir()
 	repo := initRepo(t, root, "r")
 	run(t, repo, "git", "branch", "develop")
-	wt := filepath.Join(repo, ".claude", "worktrees", "w")
-	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "w")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat", wt, "main")
 
-	w := analyze(wt, false, "develop")
+	w := discoverAnalyzed(t, root, "develop")["w"]
 	if w.Err != "" {
 		t.Fatalf("errored: %s", w.Err)
 	}
@@ -272,9 +262,58 @@ func TestBaseOverride(t *testing.T) {
 	}
 }
 
-// TestPlainDirSkipped verifies a directory that merely sits under a
-// .claude/worktrees path but has no .git entry (e.g. a committed test
-// fixture) is not listed as a worktree at all.
+// TestNonClaudeAndStale verifies worktrees outside .claude/worktrees are
+// discovered via `git worktree list`, and that a worktree whose directory is
+// removed becomes an abandoned stale entry.
+func TestNonClaudeAndStale(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	side := filepath.Join(root, "side")
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "side", side, "main")
+
+	w := discoverAnalyzed(t, root, "")["side"]
+	if w.Kind != "live" || w.Claude || !w.Registered || !w.OnDisk {
+		t.Errorf("live side: kind=%q claude=%v registered=%v onDisk=%v",
+			w.Kind, w.Claude, w.Registered, w.OnDisk)
+	}
+
+	// Remove the directory: git still tracks it -> abandoned stale entry.
+	if err := os.RemoveAll(side); err != nil {
+		t.Fatal(err)
+	}
+	w = discoverAnalyzed(t, root, "")["side"]
+	if w.Kind != "abandoned-stale" || w.OnDisk {
+		t.Errorf("stale side: kind=%q onDisk=%v, want abandoned-stale/false", w.Kind, w.OnDisk)
+	}
+}
+
+// TestOrphanWorktree verifies a worktree directory whose backing git dir is
+// gone is reported as an abandoned orphan, not an error.
+func TestOrphanWorktree(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(mkClaudeWorktrees(t, filepath.Join(root, "repo")), "orphan")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A .git file pointing at a git dir that does not exist.
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /nowhere/.git/worktrees/orphan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := discoverAnalyzed(t, root, "")
+	w, ok := got["orphan"]
+	if !ok {
+		t.Fatalf("orphan worktree not discovered: %v", got)
+	}
+	if w.Kind != "abandoned-orphan" || w.Err != "" {
+		t.Errorf("kind=%q err=%q, want abandoned-orphan / no error", w.Kind, w.Err)
+	}
+}
+
+// TestPlainDirSkipped verifies a directory under .claude/worktrees with no
+// .git entry (e.g. a committed test fixture) is not listed as a worktree.
 func TestPlainDirSkipped(t *testing.T) {
 	root := t.TempDir()
 	plain := filepath.Join(root, "repo", ".claude", "worktrees", "notawt")
@@ -284,34 +323,11 @@ func TestPlainDirSkipped(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(plain, "plugin.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	paths, err := collectWorktrees(root)
+	wts, err := discoverWorktrees(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 0 {
-		t.Fatalf("plain dir without .git should be skipped, got %v", paths)
-	}
-}
-
-// TestBrokenWorktreeReported verifies a dir that does carry a .git entry but
-// is not a valid linked worktree is still surfaced, as an error row.
-func TestBrokenWorktreeReported(t *testing.T) {
-	root := t.TempDir()
-	broken := filepath.Join(root, "repo", ".claude", "worktrees", "broken")
-	if err := os.MkdirAll(broken, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nowhere\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	paths, err := collectWorktrees(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) != 1 {
-		t.Fatalf("dir with a .git entry should be listed, got %v", paths)
-	}
-	if w := analyze(paths[0], false, ""); w.Err == "" {
-		t.Errorf("expected an error for the broken worktree, got none")
+	if len(wts) != 0 {
+		t.Fatalf("plain dir without .git should be skipped, got %v", wts)
 	}
 }
