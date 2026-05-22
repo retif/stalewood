@@ -108,8 +108,9 @@ version — `flake.nix` reads it and the Go binary embeds it via `//go:embed`.
 Release with `just release X.Y.Z`: it writes `VERSION`, commits, and tags
 `vX.Y.Z`. Then push `main` and the tag. `release.yml` asserts `VERSION`
 matches the tag, then runs GoReleaser (`.goreleaser.yaml`): cross-builds,
-GitHub Release, deb/rpm/snap packages, the Homebrew formula, cosign
-signatures, SBOMs and SLSA provenance. `just dist` builds a local snapshot.
+GitHub Release, deb/rpm/snap and npm packages, the Homebrew formula,
+cosign signatures, SBOMs and SLSA provenance. `just dist` builds a local
+snapshot.
 
 ## Security & provenance
 

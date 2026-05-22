@@ -29,6 +29,9 @@ go install github.com/retif/stalewood@latest
 # Homebrew
 brew install retif/tap/stalewood
 
+# npm
+npm install -g stalewood
+
 # Nix
 nix run github:retif/stalewood -- --help
 ```
