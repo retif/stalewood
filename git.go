@@ -1,18 +1,30 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
+
+// gitTimeout bounds every git subprocess so a hung or wedged repo cannot stall
+// the whole scan; the call surfaces as an error row instead.
+const gitTimeout = 60 * time.Second
 
 // git runs `git -C dir <args...>` and returns trimmed stdout.
 func git(dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
 	full := append([]string{"-C", dir}, args...)
-	out, err := exec.Command("git", full...).Output()
+	out, err := exec.CommandContext(ctx, "git", full...).Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("git %s: timed out after %s", strings.Join(args, " "), gitTimeout)
+		}
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			return "", &gitError{args: args, stderr: strings.TrimSpace(string(ee.Stderr)), code: ee.ExitCode()}
@@ -24,8 +36,10 @@ func git(dir string, args ...string) (string, error) {
 
 // gitOK runs a git command and reports only whether it exited 0.
 func gitOK(dir string, args ...string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
 	full := append([]string{"-C", dir}, args...)
-	return exec.Command("git", full...).Run() == nil
+	return exec.CommandContext(ctx, "git", full...).Run() == nil
 }
 
 type gitError struct {
@@ -352,16 +366,20 @@ func autoMainRef(repo, override string) (name, ref string, err error) {
 			}
 		}
 	}
-	return "", "", errors.New("could not determine base branch (pass -base)")
+	return "", "", errors.New("could not determine base branch (pass --base)")
 }
 
 // isMerged reports whether commit is an ancestor of baseRef (i.e. already
 // integrated). It distinguishes a clean "not merged" from a real error.
 func isMerged(repo, commit, baseRef string) (bool, error) {
-	cmd := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", commit, baseRef)
-	err := cmd.Run()
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	err := exec.CommandContext(ctx, "git", "-C", repo, "merge-base", "--is-ancestor", commit, baseRef).Run()
 	if err == nil {
 		return true, nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, fmt.Errorf("merge-base --is-ancestor: timed out after %s", gitTimeout)
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && ee.ExitCode() == 1 {
@@ -370,7 +388,7 @@ func isMerged(repo, commit, baseRef string) (bool, error) {
 	return false, err
 }
 
-// removeWorktree detaches a worktree via `git worktree remove`.
+// removeWorktree detaches a worktree via `git worktree remove` (timed out via git()).
 func removeWorktree(repo, worktree string, force bool) error {
 	args := []string{"worktree", "remove"}
 	if force {

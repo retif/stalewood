@@ -26,10 +26,14 @@ func main() {
 	fs.Usage = func() {}
 
 	prune := fs.Bool("prune", false, "remove worktrees whose work is merged")
+	dryRun := fs.Bool("dry-run", false, "with --prune, show what would be removed without removing it")
 	force := fs.Bool("force", false, "with --prune, also remove merged worktrees that are dirty or locked")
 	jsonOut := fs.Bool("json", false, "emit JSON instead of a table")
 	withSize := fs.Bool("size", false, "measure each worktree's disk usage")
 	base := fs.String("base", "", "ref to test every worktree against (default: per-worktree base)")
+	verbose := fs.Bool("verbose", false, "log per-worktree detail to stderr")
+	quiet := fs.Bool("quiet", false, "suppress progress output")
+	noPager := fs.Bool("no-pager", false, "do not page long output")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	switch err := fs.Parse(os.Args[1:]); {
@@ -63,34 +67,52 @@ func main() {
 		usageFail("%s: not a directory", root)
 	}
 
-	wts, err := discoverWorktrees(abs)
+	r := newReporter(*verbose, *quiet)
+	pal := newPalette()
+
+	wts, err := discoverWorktrees(abs, r)
 	if err != nil {
+		r.clear()
 		fatal(err)
 	}
 
 	// Pruning needs sizes so it can report reclaimed space.
 	measure := *withSize || *prune
 	for i := range wts {
+		r.progress("analyzing %d/%d  %s", i+1, len(wts), wts[i].Name)
 		analyze(&wts[i], measure, *base)
+		r.note("%s/%s  base=%s  %s",
+			repoLabel(abs, wts[i].Repo), wts[i].Name, baseLabel(wts[i]), statusLabel(wts[i]))
+	}
+	r.clear()
+
+	if *dryRun && !*prune {
+		r.note("note: --dry-run has no effect without --prune; the default report is already read-only")
 	}
 
-	if *prune {
-		os.Exit(runPrune(abs, wts, *force, *jsonOut))
-	}
-	if *jsonOut {
+	switch {
+	case *prune:
+		os.Exit(runPrune(abs, wts, *force, *dryRun, *jsonOut, *noPager, pal))
+	case *jsonOut:
 		emitJSON(abs, wts)
-		return
+	default:
+		withPager(*noPager, func(w io.Writer) { emitTable(w, abs, wts, *withSize, pal) })
 	}
-	emitTable(abs, wts, *withSize)
 }
 
-// usage writes the help text to w. It is sent to stdout on explicit --help,
-// to stderr on a bad invocation.
+// usage writes the help text to w — stdout on explicit --help, stderr on a
+// bad invocation. It leads with examples (clig.dev).
 func usage(w io.Writer) {
 	fmt.Fprint(w, `stalewood - find and reap merged git worktrees
 
 Usage:
   stalewood [flags] [path]
+
+Examples:
+  stalewood ~/projects                    report worktrees under a path
+  stalewood --size ~/projects             report, measuring disk usage
+  stalewood --prune --dry-run ~/projects  show what --prune would remove
+  stalewood --prune ~/projects            remove every merged worktree
 
   path   directory tree to scan (default ".")
 
@@ -101,10 +123,14 @@ read-only report - it shows exactly what --prune would remove.
 
 Flags:
   --prune        remove worktrees whose work is merged
+  --dry-run      with --prune, show what would be removed without removing it
   --force        with --prune, also remove merged worktrees that are dirty/locked
   --size         measure each worktree's disk usage
   --base REF     test every worktree against REF instead of its own base
   --json         emit JSON instead of a table
+  --verbose      log per-worktree detail to stderr
+  --quiet        suppress progress output
+  --no-pager     do not page long output
   --version      print version and exit
   -h, --help     show this help
 
@@ -112,11 +138,6 @@ Exit codes:
   0  success
   1  runtime failure
   2  usage error
-
-Examples:
-  stalewood --size ~/projects             # report, with disk usage
-  stalewood --base oleks/main ~/repo      # force a specific base
-  stalewood --prune ~/projects            # remove merged worktrees
 `)
 }
 
@@ -163,7 +184,7 @@ func baseLabel(w Worktree) string {
 	}
 }
 
-// statusLabel renders the STATUS cell for a worktree.
+// statusLabel renders the plain (uncoloured) STATUS text for a worktree.
 func statusLabel(w Worktree) string {
 	if w.Err != "" {
 		return "error: " + w.Err
@@ -184,6 +205,20 @@ func statusLabel(w Worktree) string {
 	return s
 }
 
+// paintStatus colours a STATUS label: green merged, yellow abandoned, red error.
+func paintStatus(pal palette, w Worktree, label string) string {
+	switch {
+	case w.Err != "":
+		return pal.red(label)
+	case w.Kind != "live":
+		return pal.yellow(label)
+	case w.Merged:
+		return pal.green(label)
+	default:
+		return label
+	}
+}
+
 // abandonedFix returns the suggested manual cleanup for an abandoned worktree.
 func abandonedFix(w Worktree) string {
 	switch w.Kind {
@@ -195,16 +230,19 @@ func abandonedFix(w Worktree) string {
 	return ""
 }
 
-func emitTable(root string, wts []Worktree, withSize bool) {
+// emitTable writes the human-readable report to out. STATUS is the last column
+// so its colour codes never disturb tabwriter alignment.
+func emitTable(out io.Writer, root string, wts []Worktree, withSize bool, pal palette) {
 	if len(wts) == 0 {
-		fmt.Println("No worktrees found under", root)
+		fmt.Fprintln(out, "No worktrees found under", root)
 		return
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	header := "REPO\tWORKTREE\tBRANCH\tBASE\tSTATUS"
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	header := "REPO\tWORKTREE\tBRANCH\tBASE"
 	if withSize {
 		header += "\tSIZE"
 	}
+	header += "\tSTATUS"
 	fmt.Fprintln(tw, header)
 
 	var merged, unmerged, abandoned, errored int
@@ -230,30 +268,30 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if w.Detached {
 			branch = "(detached)"
 		}
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
-			repoLabel(root, w.Repo), w.Name, branch, baseLabel(w), statusLabel(w))
+		row := fmt.Sprintf("%s\t%s\t%s\t%s", repoLabel(root, w.Repo), w.Name, branch, baseLabel(w))
 		if withSize {
 			row += "\t" + humanSize(w.SizeBytes)
 		}
+		row += "\t" + paintStatus(pal, w, statusLabel(w))
 		fmt.Fprintln(tw, row)
 	}
 	tw.Flush()
 
-	fmt.Printf("\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged - %d abandoned",
+	fmt.Fprintf(out, "\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged - %d abandoned",
 		len(wts), countRepos(wts), merged, unmerged, abandoned)
 	if errored > 0 {
-		fmt.Printf(" - %d error", errored)
+		fmt.Fprintf(out, " - %d error", errored)
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 	if merged > 0 {
 		hint := ""
 		if reclaimable > 0 {
 			hint = fmt.Sprintf(" (~%s)", humanSize(reclaimable))
 		}
-		fmt.Printf("%d merged worktree(s) removable%s - run with --prune to reap them.\n", merged, hint)
+		fmt.Fprintf(out, "%d merged worktree(s) removable%s - run with --prune to reap them.\n", merged, hint)
 	}
 	if abandoned > 0 {
-		fmt.Printf("%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
+		fmt.Fprintf(out, "%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
 	}
 }
 
@@ -281,24 +319,23 @@ type pruneAction struct {
 	Path   string `json:"path"`
 	Repo   string `json:"repo"`
 	Name   string `json:"name"`
-	Action string `json:"action"` // removed | skipped | failed | kept
+	Action string `json:"action"` // removed | would-remove | skipped | failed | kept
 	Reason string `json:"reason,omitempty"`
 	Freed  int64  `json:"freed_bytes,omitempty"`
 }
 
-// runPrune removes every merged live worktree and returns a process exit code.
-// Abandoned worktrees are reported but never removed.
-func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
+// runPrune removes (or, with dryRun, would remove) every merged live worktree
+// and returns a process exit code. Abandoned worktrees are never removed.
+func runPrune(root string, wts []Worktree, force, dryRun, jsonOut, noPager bool, pal palette) int {
 	var actions []pruneAction
 	var freed int64
-	var removed, skipped, failed, kept int
+	var removed, would, skipped, failed, kept int
 
 	for _, w := range wts {
 		a := pruneAction{Path: w.Path, Repo: w.Repo, Name: w.Name}
 		switch {
 		case w.Kind != "live":
-			a.Action = "kept"
-			a.Reason = abandonedFix(w)
+			a.Action, a.Reason = "kept", abandonedFix(w)
 			kept++
 		case !w.Prunable():
 			a.Action = "kept"
@@ -316,10 +353,16 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 				a.Reason = "locked (rerun with --force)"
 			}
 			skipped++
+		case dryRun:
+			a.Action = "would-remove"
+			if w.SizeBytes > 0 {
+				a.Freed = w.SizeBytes
+				freed += w.SizeBytes
+			}
+			would++
 		default:
 			if err := removeWorktree(w.Repo, w.Path, w.Dirty || w.Locked); err != nil {
-				a.Action = "failed"
-				a.Reason = err.Error()
+				a.Action, a.Reason = "failed", err.Error()
 				failed++
 			} else {
 				a.Action = "removed"
@@ -337,31 +380,52 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(struct {
-			Root       string        `json:"root"`
-			Removed    int           `json:"removed"`
-			Skipped    int           `json:"skipped"`
-			Failed     int           `json:"failed"`
-			Kept       int           `json:"kept"`
-			FreedBytes int64         `json:"freed_bytes"`
-			Actions    []pruneAction `json:"actions"`
-		}{root, removed, skipped, failed, kept, freed, actions})
+			Root        string        `json:"root"`
+			DryRun      bool          `json:"dry_run"`
+			Removed     int           `json:"removed"`
+			WouldRemove int           `json:"would_remove"`
+			Skipped     int           `json:"skipped"`
+			Failed      int           `json:"failed"`
+			Kept        int           `json:"kept"`
+			FreedBytes  int64         `json:"freed_bytes"`
+			Actions     []pruneAction `json:"actions"`
+		}{root, dryRun, removed, would, skipped, failed, kept, freed, actions})
 	} else {
-		for _, a := range actions {
-			if a.Action == "kept" {
-				continue // unmerged / abandoned are the normal case; stay quiet
+		withPager(noPager, func(out io.Writer) {
+			for _, a := range actions {
+				if a.Action == "kept" {
+					continue // unmerged / abandoned are the normal case; stay quiet
+				}
+				word := a.Action
+				switch a.Action {
+				case "removed":
+					word = pal.green(word)
+				case "failed":
+					word = pal.red(word)
+				}
+				line := fmt.Sprintf("  %-14s %s/%s", word, repoLabel(root, a.Repo), a.Name)
+				if a.Reason != "" {
+					line += "  (" + a.Reason + ")"
+				}
+				fmt.Fprintln(out, line)
 			}
-			line := fmt.Sprintf("  %-8s %s/%s", a.Action, repoLabel(root, a.Repo), a.Name)
-			if a.Reason != "" {
-				line += "  (" + a.Reason + ")"
+			if dryRun {
+				fmt.Fprintf(out, "\nwould remove %d - skipped %d - kept %d", would, skipped, kept)
+			} else {
+				fmt.Fprintf(out, "\nremoved %d - skipped %d - failed %d - kept %d", removed, skipped, failed, kept)
 			}
-			fmt.Println(line)
-		}
-		fmt.Printf("\nremoved %d - skipped %d - failed %d - kept %d",
-			removed, skipped, failed, kept)
-		if freed > 0 {
-			fmt.Printf(" - reclaimed ~%s", humanSize(freed))
-		}
-		fmt.Println()
+			if freed > 0 {
+				verb := "reclaimed"
+				if dryRun {
+					verb = "would reclaim"
+				}
+				fmt.Fprintf(out, " - %s ~%s", verb, humanSize(freed))
+			}
+			fmt.Fprintln(out)
+			if dryRun {
+				fmt.Fprintln(out, "(dry run - nothing was removed; rerun without --dry-run to apply)")
+			}
+		})
 	}
 
 	if failed > 0 {

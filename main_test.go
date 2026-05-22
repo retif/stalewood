@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -131,7 +132,7 @@ func mkClaudeWorktrees(t *testing.T, repo string) string {
 // returns them keyed by worktree name.
 func discoverAnalyzed(t *testing.T, root, base string) map[string]Worktree {
 	t.Helper()
-	wts, err := discoverWorktrees(root)
+	wts, err := discoverWorktrees(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,11 +324,39 @@ func TestPlainDirSkipped(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(plain, "plugin.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wts, err := discoverWorktrees(root)
+	wts, err := discoverWorktrees(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(wts) != 0 {
 		t.Fatalf("plain dir without .git should be skipped, got %v", wts)
+	}
+}
+
+func TestPalette(t *testing.T) {
+	off := palette{enabled: false}
+	if got := off.green("x"); got != "x" {
+		t.Errorf("disabled palette coloured output: %q", got)
+	}
+	on := palette{enabled: true}
+	if got := on.green("x"); got == "x" || !strings.Contains(got, "x") {
+		t.Errorf("enabled palette did not wrap: %q", got)
+	}
+	if got := on.green(""); got != "" {
+		t.Errorf("palette coloured an empty string: %q", got)
+	}
+}
+
+func TestPaintStatus(t *testing.T) {
+	pal := palette{enabled: false} // disabled palette: paintStatus is a pass-through
+	for i, w := range []Worktree{
+		{Kind: "live", Merged: true},
+		{Kind: "abandoned-orphan"},
+		{Err: "boom"},
+		{Kind: "live"},
+	} {
+		if got := paintStatus(pal, w, "LBL"); got != "LBL" {
+			t.Errorf("case %d: paintStatus = %q, want LBL", i, got)
+		}
 	}
 }

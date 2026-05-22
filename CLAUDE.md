@@ -15,10 +15,10 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 - `2` — usage error (unknown flag, bad or extra argument).
 
 ## Help & version
-- `-h` / `--help` prints help to **stdout** and exits `0`.
+- `-h` / `--help` prints help to **stdout** and exits `0`; it leads with examples.
 - A flag/argument error prints the message + usage to **stderr** and exits `2`.
 - `--version` prints `stalewood <version>` to stdout and exits `0`.
-- Keep `--help` concise: summary line, usage line, flags, exit codes, a few examples.
+- Keep `--help` concise: summary, usage, examples, flags, exit codes.
 
 ## Flags & arguments
 - Flag names are full words and all work with `--` (e.g. `--prune`); show the `--` form in help.
@@ -27,18 +27,30 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 
 ## Destructive actions
 - Anything that deletes (`--prune`) is opt-in via an explicit flag, never the default.
-- The default report mode *is* the dry run — it shows exactly what `--prune` would remove.
+- `--prune --dry-run` and the default report both show what would be removed without removing it.
 - Skip dirty/locked worktrees unless `--force` is given; never remove abandoned worktrees automatically.
-- No interactive confirmation prompt — the explicit `--prune` flag plus the
-  report-as-dry-run is the safeguard, and it keeps the tool scriptable.
+- No interactive confirmation prompt — the explicit `--prune` flag plus dry-run is the safeguard,
+  and it keeps the tool scriptable.
 
 ## Machine output
 - `--json` emits structured output for scripts. Keep the JSON schema stable and additive.
 
-## Colour / TTY
-- No colour today. If colour is added, emit it only when stdout is a TTY and honour `NO_COLOR`.
+## Terminal-aware behaviour (colour, progress, paging)
+- Detect a terminal with `isTTY`. All of the below degrade to plain, unpaged,
+  uncoloured output when stdout/stderr is not a terminal, so pipes stay clean.
+- **Colour**: the STATUS column is coloured only when stdout is a TTY and `NO_COLOR` is unset.
+  Colour goes only in the last table column so it never disturbs `tabwriter` alignment.
+- **Progress**: a transient stderr line, shown only on an interactive stderr and not under `--verbose`/`--quiet`.
+- **`--verbose`** logs durable per-worktree detail to stderr; **`--quiet`** silences progress.
+- **Paging**: human output is paged through `$PAGER` (default `less -FIRX`) on an
+  interactive stdout, unless `--no-pager`. JSON is never paged.
+
+## Robustness
+- Every git subprocess runs under a timeout (`gitTimeout`) so a wedged repo
+  becomes an error row instead of hanging the whole scan.
 
 ## Keep it boring
 - The standard-library `flag` package is sufficient; do not add a CLI framework.
+- Stay dependency-free (the Nix build relies on `vendorHash = null`).
 - Flag and output changes must be additive — do not break existing invocations or the JSON schema.
 - `just check` (gofmt + vet + test) must pass before committing.

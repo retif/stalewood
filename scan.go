@@ -92,14 +92,19 @@ func underClaudeWorktrees(path string) bool {
 
 // walkTree walks root once, collecting directories that carry a .git entry
 // (working trees, to resolve into repos) and every ".claude/worktrees"
-// directory (to enumerate Claude Code worktrees and orphans).
-func walkTree(root string) (gitDirs, claudeDirs []string, err error) {
+// directory. It reports walk progress to r.
+func walkTree(root string, r *reporter) (gitDirs, claudeDirs []string, err error) {
+	dirs := 0
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return nil // unreadable entry: skip, keep walking
 		}
 		if !d.IsDir() {
 			return nil
+		}
+		dirs++
+		if dirs%128 == 0 {
+			r.progress("scanning %s  (%d dirs)", root, dirs)
 		}
 		if skipDirs[d.Name()] {
 			return fs.SkipDir
@@ -148,10 +153,11 @@ func orphanRepoRoot(worktreeDir string) string {
 // discoverWorktrees walks root and returns every linked worktree it can find,
 // from three sources unioned together: directories under .claude/worktrees,
 // `git worktree list` of every repo found, and abandoned worktrees (orphan
-// directories and stale git entries). Discovery fields are filled in;
-// merge analysis is left to analyze.
-func discoverWorktrees(root string) ([]Worktree, error) {
-	gitDirs, claudeDirs, err := walkTree(root)
+// directories and stale git entries). Discovery fields are filled in; merge
+// analysis is left to analyze. Progress is reported to r.
+func discoverWorktrees(root string, r *reporter) ([]Worktree, error) {
+	r.progress("scanning %s", root)
+	gitDirs, claudeDirs, err := walkTree(root, r)
 	if err != nil {
 		return nil, err
 	}
@@ -196,12 +202,15 @@ func discoverWorktrees(root string) ([]Worktree, error) {
 	result := map[string]*Worktree{}
 
 	// Source: `git worktree list` of every repo found.
+	r.progress("listing worktrees in %d repo(s)", len(repos))
 	for cd, anyDir := range repos {
 		entries, e := listWorktrees(anyDir)
 		if e != nil {
+			r.note("warning: git worktree list failed in %s: %v", repoRootOf(cd), e)
 			continue
 		}
 		repoRoot := repoRootOf(cd)
+		r.note("repo %s: %d linked worktree(s)", repoRoot, len(entries))
 		for _, en := range entries {
 			if en.Bare {
 				continue
@@ -246,6 +255,7 @@ func discoverWorktrees(root string) ([]Worktree, error) {
 		out = append(out, *w)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	r.note("discovered %d worktree(s)", len(out))
 	return out, nil
 }
 
@@ -312,7 +322,7 @@ func analyze(w *Worktree, withSize bool, baseOverride string) {
 // resolveBase picks the ref to test a worktree branch against. It returns a
 // display name, a resolvable git ref, and how the choice was made:
 //
-//	flag       - the explicit -base override
+//	flag       - the explicit --base override
 //	reflog     - the branch's "Created from" reflog ref
 //	reflog-sha - that reflog entry's SHA, named via name-rev
 //	upstream   - the branch's configured upstream branch

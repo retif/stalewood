@@ -34,6 +34,10 @@ stalewood [flags] [path]
 | `--json`     | emit JSON instead of a table                                      |
 | `--prune`    | remove worktrees whose work is merged                             |
 | `--force`    | with `--prune`, also remove merged worktrees that are dirty/locked |
+| `--dry-run`  | with `--prune`, show what would be removed without removing it |
+| `--verbose`  | log per-worktree detail to stderr                                 |
+| `--quiet`    | suppress progress output                                          |
+| `--no-pager` | do not page long output                                           |
 | `--version`  | print version and exit                                            |
 | `-h, --help` | show help                                                         |
 
@@ -111,11 +115,27 @@ literal `HEAD` or names a since-removed remote.
 ## Pruning
 
 `--prune` runs `git worktree remove` on every **merged** worktree — anywhere,
-not just under `.claude/worktrees/`. Running with no flags is the dry run: it
-reports exactly what `--prune` would remove. Unmerged worktrees are kept; a
+not just under `.claude/worktrees/`. Running with `--prune --dry-run` (or
+with no flags at all) reports exactly what `--prune` would remove without
+touching anything. Unmerged worktrees are kept; a
 merged worktree that is dirty or locked is skipped unless `--force` is given.
 **Abandoned worktrees are never removed by `--prune`** — they are reported with
 a suggested fix. Exit status is non-zero if any removal failed.
+
+## Terminal behaviour
+
+stalewood adapts to where its output goes:
+
+- **Colour** - the STATUS column is coloured on an interactive terminal;
+  disabled when piped or when `NO_COLOR` is set.
+- **Progress** - a transient progress line is shown on an interactive stderr
+  during a scan. `--quiet` silences it; `--verbose` replaces it with durable
+  per-worktree log lines on stderr.
+- **Paging** - human output is paged through `$PAGER` (default `less -FIRX`)
+  on an interactive terminal; `--no-pager` disables it. JSON is never paged.
+
+Piped or redirected, output is plain, unpaged and uncoloured. Every git
+subprocess runs under a timeout so a wedged repo cannot stall the scan.
 
 ## Contributing
 
