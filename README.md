@@ -25,7 +25,7 @@ go install github.com/retif/stalewood@latest
 nix run github:retif/stalewood -- --help
 ```
 
-Prebuilt binaries for Linux, macOS and Windows are on the
+Prebuilt binaries for Linux and macOS are on the
 [releases page](https://github.com/retif/stalewood/releases).
 
 ## Build from source

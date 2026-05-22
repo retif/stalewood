@@ -10,16 +10,14 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
+    # Unix only: the stale-lock PID check uses syscall.Kill, not on Windows.
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - README.md
       - LICENSE
