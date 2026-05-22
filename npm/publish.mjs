@@ -49,7 +49,9 @@ for (const p of platforms) {
       {
         name: pkg,
         version,
-        description: `stalewood prebuilt binary for ${p.os}-${p.cpu}`,
+        description:
+          `stalewood binary for ${p.os}-${p.cpu} — installed automatically by ` +
+          `the 'stalewood' package; do not install directly`,
         license: "MIT",
         repository,
         os: [p.os],
