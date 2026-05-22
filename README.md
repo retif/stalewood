@@ -1,4 +1,4 @@
-# stale-worktrees
+# stalewood
 
 Scans a directory tree for git worktrees and tells you which ones are safe to
 delete — i.e. whose work is already integrated into another branch. Optionally
@@ -7,9 +7,9 @@ reaps them.
 ## Build & run
 
 ```sh
-cd stale-worktrees
-go build -o stale-worktrees .
-./stale-worktrees -size ~/projects
+cd stalewood
+go build -o stalewood .
+./stalewood -size ~/projects
 ```
 
 `go build` produces a self-contained binary; copy it onto your `PATH` (e.g.
@@ -18,7 +18,7 @@ go build -o stale-worktrees .
 ## Usage
 
 ```sh
-stale-worktrees [flags] [path]
+stalewood [flags] [path]
 ```
 
 `path` defaults to the current directory.
@@ -34,10 +34,10 @@ stale-worktrees [flags] [path]
 ### Examples
 
 ```sh
-stale-worktrees -size ~/projects             # report, with disk usage
-stale-worktrees -base oleks/main ~/repo      # force a specific base
-stale-worktrees -prune ~/projects            # remove merged worktrees
-stale-worktrees -json ~/projects             # machine-readable output
+stalewood -size ~/projects             # report, with disk usage
+stalewood -base oleks/main ~/repo      # force a specific base
+stalewood -prune ~/projects            # remove merged worktrees
+stalewood -json ~/projects             # machine-readable output
 ```
 
 ## Discovery

@@ -1,4 +1,4 @@
-// Command stale-worktrees scans a directory tree for git worktrees — Claude
+// Command stalewood scans a directory tree for git worktrees — Claude
 // Code worktrees under ".claude/worktrees/*", linked worktrees from
 // `git worktree list`, and abandoned ones — and reports, for each, whether its
 // work is already integrated. With -prune it removes the merged ones.
@@ -56,10 +56,10 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `stale-worktrees - find and reap merged git worktrees
+	fmt.Fprint(os.Stderr, `stalewood - find and reap merged git worktrees
 
 Usage:
-  stale-worktrees [flags] [path]
+  stalewood [flags] [path]
 
   path   directory tree to scan (default ".")
 
@@ -84,14 +84,14 @@ Abandoned worktrees are reported with a suggested fix but never removed by
 (auto), (flag), or no suffix for a plain reflog hit.
 
 Examples:
-  stale-worktrees -size ~/projects             # report, with disk usage
-  stale-worktrees -base oleks/main ~/repo      # force a specific base
-  stale-worktrees -prune ~/projects            # remove merged worktrees
+  stalewood -size ~/projects             # report, with disk usage
+  stalewood -base oleks/main ~/repo      # force a specific base
+  stalewood -prune ~/projects            # remove merged worktrees
 `)
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "stale-worktrees:", err)
+	fmt.Fprintln(os.Stderr, "stalewood:", err)
 	os.Exit(1)
 }
 
