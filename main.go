@@ -1,37 +1,66 @@
-// Command stalewood scans a directory tree for git worktrees — Claude
-// Code worktrees under ".claude/worktrees/*", linked worktrees from
+// Command stalewood scans a directory tree for git worktrees — Claude Code
+// worktrees under ".claude/worktrees/*", linked worktrees from
 // `git worktree list`, and abandoned ones — and reports, for each, whether its
-// work is already integrated. With -prune it removes the merged ones.
+// work is already integrated. With --prune it removes the merged ones.
+//
+// Command-line behaviour follows https://clig.dev where reasonable; see
+// CLAUDE.md for the project's CLI rules.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
 )
 
+const version = "0.1.0"
+
 func main() {
-	prune := flag.Bool("prune", false, "remove worktrees whose work is merged")
-	force := flag.Bool("force", false, "with -prune, also remove merged worktrees that are dirty or locked")
-	jsonOut := flag.Bool("json", false, "emit JSON instead of a table")
-	withSize := flag.Bool("size", false, "measure each worktree's disk usage")
-	base := flag.String("base", "", "ref to test every worktree against (default: per-worktree base)")
-	flag.Usage = usage
-	flag.Parse()
+	fs := flag.NewFlagSet("stalewood", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // usage and errors are printed by this file
+	fs.Usage = func() {}
+
+	prune := fs.Bool("prune", false, "remove worktrees whose work is merged")
+	force := fs.Bool("force", false, "with --prune, also remove merged worktrees that are dirty or locked")
+	jsonOut := fs.Bool("json", false, "emit JSON instead of a table")
+	withSize := fs.Bool("size", false, "measure each worktree's disk usage")
+	base := fs.String("base", "", "ref to test every worktree against (default: per-worktree base)")
+	showVersion := fs.Bool("version", false, "print version and exit")
+
+	switch err := fs.Parse(os.Args[1:]); {
+	case errors.Is(err, flag.ErrHelp):
+		usage(os.Stdout) // explicit --help: stdout, exit 0
+		os.Exit(0)
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "stalewood:", err)
+		usage(os.Stderr) // bad invocation: stderr, exit 2
+		os.Exit(2)
+	}
+
+	if *showVersion {
+		fmt.Println("stalewood", version)
+		os.Exit(0)
+	}
 
 	root := "."
-	if flag.NArg() > 0 {
-		root = flag.Arg(0)
+	switch fs.NArg() {
+	case 0:
+	case 1:
+		root = fs.Arg(0)
+	default:
+		usageFail("accepts at most one path, got %d", fs.NArg())
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		fatal(err)
 	}
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
-		fatal(fmt.Errorf("%s: not a directory", root))
+		usageFail("%s: not a directory", root)
 	}
 
 	wts, err := discoverWorktrees(abs)
@@ -55,44 +84,53 @@ func main() {
 	emitTable(abs, wts, *withSize)
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `stalewood - find and reap merged git worktrees
+// usage writes the help text to w. It is sent to stdout on explicit --help,
+// to stderr on a bad invocation.
+func usage(w io.Writer) {
+	fmt.Fprint(w, `stalewood - find and reap merged git worktrees
 
 Usage:
   stalewood [flags] [path]
 
   path   directory tree to scan (default ".")
 
-Worktrees are discovered from three sources, unioned: directories under
-.claude/worktrees, `+"`git worktree list`"+` of every repo found, and abandoned
-worktrees (orphan directories git forgot, and stale entries whose dir is gone).
-
-A live worktree counts as merged if its HEAD is an ancestor of its base
-branch, or if HEAD is contained in any branch other than its own. The base is
-recovered per-worktree from the reflog, then the branch's upstream; failing
-that, the repo's main branch is used.
+Worktrees are discovered from three sources: directories under
+.claude/worktrees, git worktree list of every repo found, and abandoned
+worktrees (orphan directories and stale entries). Running with no flags is a
+read-only report - it shows exactly what --prune would remove.
 
 Flags:
-  -prune        remove worktrees whose work is merged
-  -force        with -prune, also remove merged worktrees that are dirty/locked
-  -size         measure each worktree's disk usage
-  -base REF     test every worktree against REF instead of its own base
-  -json         emit JSON instead of a table
+  --prune        remove worktrees whose work is merged
+  --force        with --prune, also remove merged worktrees that are dirty/locked
+  --size         measure each worktree's disk usage
+  --base REF     test every worktree against REF instead of its own base
+  --json         emit JSON instead of a table
+  --version      print version and exit
+  -h, --help     show this help
 
-Abandoned worktrees are reported with a suggested fix but never removed by
--prune. The BASE column suffix shows how the base was found: (sha), (upstream),
-(auto), (flag), or no suffix for a plain reflog hit.
+Exit codes:
+  0  success
+  1  runtime failure
+  2  usage error
 
 Examples:
-  stalewood -size ~/projects             # report, with disk usage
-  stalewood -base oleks/main ~/repo      # force a specific base
-  stalewood -prune ~/projects            # remove merged worktrees
+  stalewood --size ~/projects             # report, with disk usage
+  stalewood --base oleks/main ~/repo      # force a specific base
+  stalewood --prune ~/projects            # remove merged worktrees
 `)
 }
 
+// fatal reports a runtime failure on stderr and exits 1.
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "stalewood:", err)
 	os.Exit(1)
+}
+
+// usageFail reports a bad invocation on stderr, prints usage, and exits 2.
+func usageFail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "stalewood: "+format+"\n", args...)
+	usage(os.Stderr)
+	os.Exit(2)
 }
 
 // repoLabel renders a repo path relative to the scan root for compact display.
@@ -212,7 +250,7 @@ func emitTable(root string, wts []Worktree, withSize bool) {
 		if reclaimable > 0 {
 			hint = fmt.Sprintf(" (~%s)", humanSize(reclaimable))
 		}
-		fmt.Printf("%d merged worktree(s) removable%s - run with -prune to reap them.\n", merged, hint)
+		fmt.Printf("%d merged worktree(s) removable%s - run with --prune to reap them.\n", merged, hint)
 	}
 	if abandoned > 0 {
 		fmt.Printf("%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
@@ -273,9 +311,9 @@ func runPrune(root string, wts []Worktree, force, jsonOut bool) int {
 		case (w.Dirty || w.Locked) && !force:
 			a.Action = "skipped"
 			if w.Dirty {
-				a.Reason = "uncommitted changes (rerun with -force)"
+				a.Reason = "uncommitted changes (rerun with --force)"
 			} else {
-				a.Reason = "locked (rerun with -force)"
+				a.Reason = "locked (rerun with --force)"
 			}
 			skipped++
 		default:

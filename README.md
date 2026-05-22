@@ -9,11 +9,15 @@ reaps them.
 ```sh
 cd stalewood
 go build -o stalewood .
-./stalewood -size ~/projects
+./stalewood --size ~/projects
 ```
 
 `go build` produces a self-contained binary; copy it onto your `PATH` (e.g.
 `~/go/bin/`) to run it from anywhere. Or skip the build: `go run . ~/projects`.
+
+With Nix: `nix develop` for the dev shell, `nix build` / `nix run` for the
+tool. Common tasks are in the `justfile` — `just build`, `just test`,
+`just check`, `just run --size ~/projects`.
 
 ## Usage
 
@@ -23,21 +27,25 @@ stalewood [flags] [path]
 
 `path` defaults to the current directory.
 
-| Flag        | Effect                                                            |
-|-------------|-------------------------------------------------------------------|
-| `-size`     | measure each worktree's disk usage                                |
-| `-base REF` | test every worktree against `REF` instead of its own base         |
-| `-json`     | emit JSON instead of a table                                      |
-| `-prune`    | remove worktrees whose work is merged                             |
-| `-force`    | with `-prune`, also remove merged worktrees that are dirty/locked  |
+| Flag         | Effect                                                            |
+|--------------|-------------------------------------------------------------------|
+| `--size`     | measure each worktree's disk usage                                |
+| `--base REF` | test every worktree against `REF` instead of its own base         |
+| `--json`     | emit JSON instead of a table                                      |
+| `--prune`    | remove worktrees whose work is merged                             |
+| `--force`    | with `--prune`, also remove merged worktrees that are dirty/locked |
+| `--version`  | print version and exit                                            |
+| `-h, --help` | show help                                                         |
+
+Exit codes: `0` success, `1` runtime failure, `2` usage error.
 
 ### Examples
 
 ```sh
-stalewood -size ~/projects             # report, with disk usage
-stalewood -base oleks/main ~/repo      # force a specific base
-stalewood -prune ~/projects            # remove merged worktrees
-stalewood -json ~/projects             # machine-readable output
+stalewood --size ~/projects             # report, with disk usage
+stalewood --base oleks/main ~/repo      # force a specific base
+stalewood --prune ~/projects            # remove merged worktrees
+stalewood --json ~/projects             # machine-readable output
 ```
 
 ## Discovery
@@ -83,7 +91,7 @@ base is recovered in this order; the `BASE` column suffix shows which step won:
 
 | Source        | Suffix       | How                                              |
 |---------------|--------------|--------------------------------------------------|
-| `-base REF`   | `(flag)`     | explicit override, applied to every worktree     |
+| `--base REF`  | `(flag)`     | explicit override, applied to every worktree     |
 | reflog ref    | *(none)*     | the branch's `Created from <ref>` reflog entry   |
 | reflog SHA    | `(sha)`      | that reflog entry's commit, named via `name-rev` |
 | upstream      | `(upstream)` | the branch's configured upstream branch          |
@@ -102,8 +110,15 @@ literal `HEAD` or names a since-removed remote.
 
 ## Pruning
 
-`-prune` runs `git worktree remove` on every **merged** worktree — anywhere,
-not just under `.claude/worktrees/`. Unmerged worktrees are kept. A merged
-worktree that is dirty or locked is skipped unless `-force` is given.
-**Abandoned worktrees are never removed by `-prune`** — they are reported with
-the suggested fix and left for you. Exit status is non-zero if any removal failed.
+`--prune` runs `git worktree remove` on every **merged** worktree — anywhere,
+not just under `.claude/worktrees/`. Running with no flags is the dry run: it
+reports exactly what `--prune` would remove. Unmerged worktrees are kept; a
+merged worktree that is dirty or locked is skipped unless `--force` is given.
+**Abandoned worktrees are never removed by `--prune`** — they are reported with
+a suggested fix. Exit status is non-zero if any removal failed.
+
+## Contributing
+
+CLI behaviour follows [clig.dev](https://clig.dev) where reasonable — see
+`CLAUDE.md` for the rules. Run `just check` (gofmt + vet + test) before
+committing.
