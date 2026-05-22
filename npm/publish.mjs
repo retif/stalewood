@@ -9,9 +9,11 @@ import { join } from "node:path";
 const root = new URL("..", import.meta.url).pathname;
 const version = readFileSync(join(root, "VERSION"), "utf8").trim();
 const dryRun = !!process.env.NPM_DRY_RUN;
+// Provenance needs CI OIDC; NPM_NO_PROVENANCE=1 drops it for local publishes.
+const withProvenance = !process.env.NPM_NO_PROVENANCE;
 const publishArgs = dryRun
   ? ["--dry-run", "--ignore-scripts"]
-  : ["--access", "public", "--provenance", "--ignore-scripts"];
+  : ["--access", "public", "--ignore-scripts", ...(withProvenance ? ["--provenance"] : [])];
 const repository = { type: "git", url: "git+https://github.com/retif/stalewood.git" };
 
 const platforms = [
@@ -27,7 +29,7 @@ const dist = join(root, "npm-dist");
 const optionalDependencies = {};
 
 for (const p of platforms) {
-  const pkg = `stalewood-${p.os}-${p.cpu}`;
+  const pkg = `@retif/stalewood-${p.os}-${p.cpu}`;
   const exe = p.goos === "windows" ? "stalewood.exe" : "stalewood";
   const dir = join(dist, pkg);
   mkdirSync(join(dir, "bin"), { recursive: true });

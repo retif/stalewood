@@ -4,7 +4,7 @@
 // per-platform optional-dependency package; this shim locates and runs it.
 const { execFileSync } = require("node:child_process");
 
-const pkg = `stalewood-${process.platform}-${process.arch}`;
+const pkg = `@retif/stalewood-${process.platform}-${process.arch}`;
 const exe = process.platform === "win32" ? "stalewood.exe" : "stalewood";
 
 let bin;
