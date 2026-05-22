@@ -244,7 +244,7 @@ gh attestation verify stalewood_<version>_<os>_<arch>.tar.gz \
 
 ```sh
 cosign verify-blob checksums.txt \
-  --signature checksums.txt.sig --certificate checksums.txt.pem \
+  --bundle checksums.txt.bundle \
   --certificate-identity-regexp '^https://github.com/retif/stalewood' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
