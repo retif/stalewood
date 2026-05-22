@@ -141,12 +141,18 @@ Examples:
   stalewood --size ~/projects             report, measuring disk usage
   stalewood --prune --dry-run ~/projects  show what --prune would remove
   stalewood --prune ~/projects            remove every merged worktree
+  stalewood --lint abandoned ~/repo       exit 1 if the repo has abandoned worktrees
+  stalewood --json ~/projects             machine-readable output
 
   path   directory tree to scan (default ".")
 
-The report is a tree grouped by repo: each worktree shows a glyph (merged,
-unmerged, abandoned, error), its full path, branch and base, plus tags such as
-[claude], [modified files], [untracked files], [lock-stale]. A legend follows.
+Worktrees are discovered three ways: directories under .claude/worktrees, the
+worktrees of every git repo found (via git worktree list, so worktrees living
+anywhere are included), and abandoned ones - orphan dirs and stale entries.
+
+The default report is a tree grouped by repo; each worktree shows a glyph
+(merged, unmerged, abandoned, error), its full path, branch, base and tags
+such as [claude], [untracked files], [lock-stale]. A legend follows.
 
 Flags:
   --prune        remove worktrees whose work is merged
@@ -171,8 +177,8 @@ predicates (prefix ! to negate); repeat --lint to OR the groups. Predicates:
   lock-stale claude manual detached error git-prunable removable any
 
 Exit codes:
-  0  success
-  1  runtime failure
+  0  success (with --lint: no worktree matched)
+  1  runtime failure, or (with --lint) a worktree matched the selector
   2  usage error
 `)
 }
