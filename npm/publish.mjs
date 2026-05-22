@@ -54,6 +54,7 @@ for (const p of platforms) {
           `the 'stalewood' package; do not install directly`,
         license: "MIT",
         repository,
+        homepage: "https://github.com/retif/stalewood",
         os: [p.os],
         cpu: [p.cpu],
         files: ["bin/"],
@@ -61,6 +62,14 @@ for (const p of platforms) {
       null,
       2,
     ) + "\n",
+  );
+  writeFileSync(
+    join(dir, "README.md"),
+    `# ${pkg}\n\n` +
+      `Prebuilt \`stalewood\` binary for \`${p.os}-${p.cpu}\`.\n\n` +
+      `Installed automatically as an optional dependency of the\n` +
+      `[**stalewood**](https://www.npmjs.com/package/stalewood) package — do not\n` +
+      `install it directly. Source: <https://github.com/retif/stalewood>.\n`,
   );
   execFileSync("npm", ["publish", dir, ...publishArgs], { stdio: "inherit" });
   optionalDependencies[pkg] = version;
