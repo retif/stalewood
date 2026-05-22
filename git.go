@@ -157,10 +157,23 @@ func headOf(dir string) (string, error) {
 	return git(dir, "rev-parse", "HEAD")
 }
 
-// isDirty reports whether the worktree has uncommitted changes.
-func isDirty(dir string) bool {
+// worktreeChanges reports whether the worktree has tracked modifications
+// and/or untracked files.
+func worktreeChanges(dir string) (modified, untracked bool) {
 	out, err := git(dir, "status", "--porcelain")
-	return err == nil && out != ""
+	if err != nil || out == "" {
+		return false, false
+	}
+	for _, ln := range strings.Split(out, "\n") {
+		switch {
+		case ln == "":
+		case strings.HasPrefix(ln, "??"):
+			untracked = true
+		default:
+			modified = true
+		}
+	}
+	return modified, untracked
 }
 
 // leaf returns the last "/"-separated segment of a ref name.

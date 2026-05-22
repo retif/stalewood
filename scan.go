@@ -28,24 +28,21 @@ type Worktree struct {
 	BaseFrom    string `json:"base_from,omitempty"`    // how Base was chosen
 	Merged      bool   `json:"merged"`                 // work is integrated (see MergedInto)
 	MergedInto  string `json:"merged_into,omitempty"`  // ref the work was found in
-	Dirty       bool   `json:"dirty"`                  // has uncommitted changes
+	Dirty       bool   `json:"dirty"`                  // has any uncommitted change
+	Modified    bool   `json:"modified,omitempty"`     // tracked files have changes
+	Untracked   bool   `json:"untracked,omitempty"`    // untracked files present
 	Detached    bool   `json:"detached"`               // HEAD is detached (no branch)
 	SizeBytes   int64  `json:"size_bytes"`             // disk usage, -1 when not measured
 	Err         string `json:"error,omitempty"`
 }
 
-// Status is a short classification for a live worktree.
-// A trailing "*" marks uncommitted changes.
+// Status is the bare merge verdict for a worktree.
 func (w *Worktree) Status() string {
 	switch {
 	case w.Err != "":
 		return "error"
-	case w.Merged && w.Dirty:
-		return "merged*"
 	case w.Merged:
 		return "merged"
-	case w.Dirty:
-		return "unmerged*"
 	default:
 		return "unmerged"
 	}
@@ -303,7 +300,8 @@ func analyze(w *Worktree, withSize bool, baseOverride string) {
 	w.Head = short(head)
 	w.Branch = branchOf(w.Path)
 	w.Detached = w.Branch == ""
-	w.Dirty = isDirty(w.Path)
+	w.Modified, w.Untracked = worktreeChanges(w.Path)
+	w.Dirty = w.Modified || w.Untracked
 
 	name, ref, from, baseErr := resolveBase(w.Repo, w.Branch, baseOverride)
 	if baseErr != nil && baseOverride != "" {

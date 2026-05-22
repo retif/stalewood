@@ -18,7 +18,6 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 - `-h` / `--help` prints help to **stdout** and exits `0`; it leads with examples.
 - A flag/argument error prints the message + usage to **stderr** and exits `2`.
 - `--version` prints `stalewood <version>` to stdout and exits `0`.
-- Keep `--help` concise: summary, usage, examples, flags, exit codes.
 
 ## Flags & arguments
 - Flag names are full words and all work with `--` (e.g. `--prune`); show the `--` form in help.
@@ -29,27 +28,31 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 - Anything that deletes (`--prune`) is opt-in via an explicit flag, never the default.
 - `--prune --dry-run` and the default report both show what would be removed without removing it.
 - Skip dirty/locked worktrees unless `--force` is given; never remove abandoned worktrees automatically.
-- No interactive confirmation prompt — the explicit `--prune` flag plus dry-run is the safeguard,
-  and it keeps the tool scriptable.
+- No interactive confirmation prompt — the explicit `--prune` flag plus dry-run is the safeguard.
+
+## Report layout
+The human report is a tree grouped by repo: a `●` repo node (full repo path),
+each worktree as a `├─`/`└─` node with a glyph + verdict + tags, and `├──`
+field leaves (path, branch, base, or fix/error). A summary and a present-only
+legend follow. JSON (`--json`) is the stable machine format — keep its schema additive.
 
 ## Status indicators
-The STATUS column is the merge verdict plus bracketed tags. Keep the vocabulary
-small; every tag must be a real signal a reader acts on.
-- `*` — uncommitted changes; `-> REF` — merged into a branch other than the base.
-- `[manual]` — a worktree not under `.claude/worktrees/` (created by hand, not by Claude Code).
+Keep the vocabulary small; every glyph and tag must be a signal a reader acts on.
+- Glyphs: `✓` merged · `✗` unmerged · `⚠` abandoned · `!` error.
+- `-> REF` — merged into a branch other than the worktree's own base.
+- `[claude]` — created by Claude Code (under `.claude/worktrees/`); manual worktrees carry no tag.
+- `[modified]` — tracked files changed; `[untracked]` — untracked files present.
 - `[locked]` / `[lock-stale]` — a git worktree lock is held; `lock-stale` when the
   PID named in the lock reason is no longer running.
 - `[git-prunable]` — git's own `worktree list` flags the entry prunable.
-A new tag earns its place only if it is free to derive or genuinely worth a check.
-
-## Machine output
-- `--json` emits structured output for scripts. Keep the JSON schema stable and additive.
+The legend prints only the glyphs and tags that actually appear in the report.
 
 ## Terminal-aware behaviour (colour, progress, paging)
 - Detect a terminal with `isTTY`. All of the below degrade to plain, unpaged,
   uncoloured output when stdout/stderr is not a terminal, so pipes stay clean.
-- **Colour**: the STATUS column is coloured only when stdout is a TTY and `NO_COLOR` is unset.
-  Colour goes only in the last table column so it never disturbs `tabwriter` alignment.
+- **Colour & weight**: glyph and verdict are bold + colour-coded by severity;
+  repo nodes bold-cyan; tree connectors and field labels dim; tags coloured by
+  kind. Only when stdout is a TTY and `NO_COLOR` is unset.
 - **Progress**: a transient stderr line, shown only on an interactive stderr and not under `--verbose`/`--quiet`.
 - **`--verbose`** logs durable per-worktree detail to stderr; **`--quiet`** silences progress.
 - **Paging**: human output is paged through `$PAGER` (default `less -FIRX`) on an
@@ -57,7 +60,7 @@ A new tag earns its place only if it is free to derive or genuinely worth a chec
 
 ## Robustness
 - Every git subprocess runs under a timeout (`gitTimeout`) so a wedged repo
-  becomes an error row instead of hanging the whole scan.
+  becomes an error node instead of hanging the whole scan.
 
 ## Keep it boring
 - The standard-library `flag` package is sufficient; do not add a CLI framework.

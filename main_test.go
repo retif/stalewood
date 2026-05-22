@@ -61,24 +61,63 @@ func TestBaseLabel(t *testing.T) {
 	}
 }
 
+func TestWorktreeTags(t *testing.T) {
+	cases := []struct {
+		w    Worktree
+		want string
+	}{
+		{Worktree{}, ""},
+		{Worktree{Claude: true}, "claude"},
+		{Worktree{Modified: true}, "modified"},
+		{Worktree{Untracked: true}, "untracked"},
+		{Worktree{Modified: true, Untracked: true}, "modified untracked"},
+		{Worktree{Claude: true, Locked: true}, "claude locked"},
+		{Worktree{Claude: true, Locked: true, LockReason: "x (pid 2147483646)"}, "claude lock-stale"},
+		{Worktree{GitPrunable: true}, "git-prunable"},
+		{Worktree{Claude: true, Untracked: true, GitPrunable: true}, "claude untracked git-prunable"},
+	}
+	for i, c := range cases {
+		if got := strings.Join(worktreeTags(c.w), " "); got != c.want {
+			t.Errorf("case %d: worktreeTags = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
 func TestStatusLabel(t *testing.T) {
 	cases := []struct {
 		w    Worktree
 		want string
 	}{
-		{Worktree{Kind: "live", Claude: true, Merged: true, Base: "main", MergedInto: "main"}, "merged"},
-		{Worktree{Kind: "live", Claude: true, Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
-		{Worktree{Kind: "live", Claude: true}, "unmerged"},
-		{Worktree{Kind: "live", Claude: true, Locked: true}, "unmerged [locked]"},
-		{Worktree{Kind: "live", Claude: false}, "unmerged [manual]"},
-		{Worktree{Kind: "live", Claude: true, GitPrunable: true}, "unmerged [git-prunable]"},
-		{Worktree{Kind: "abandoned-stale", Claude: true, GitPrunable: true}, "abandoned (stale entry) [git-prunable]"},
-		{Worktree{Kind: "abandoned-orphan", Claude: true}, "abandoned (orphan dir)"},
+		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "main"}, "merged"},
+		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
+		{Worktree{Kind: "live"}, "unmerged"},
+		{Worktree{Kind: "live", Claude: true}, "unmerged [claude]"},
+		{Worktree{Kind: "live", Untracked: true}, "unmerged [untracked]"},
+		{Worktree{Kind: "live", Modified: true, Locked: true}, "unmerged [modified] [locked]"},
+		{Worktree{Kind: "abandoned-orphan"}, "abandoned (orphan dir)"},
+		{Worktree{Kind: "abandoned-stale", GitPrunable: true}, "abandoned (stale entry) [git-prunable]"},
 		{Worktree{Err: "boom"}, "error: boom"},
 	}
 	for i, c := range cases {
 		if got := statusLabel(c.w); got != c.want {
 			t.Errorf("case %d: statusLabel = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
+func TestGlyph(t *testing.T) {
+	cases := []struct {
+		w    Worktree
+		want string
+	}{
+		{Worktree{Kind: "live", Merged: true}, "✓"},
+		{Worktree{Kind: "live"}, "✗"},
+		{Worktree{Kind: "abandoned-orphan"}, "⚠"},
+		{Worktree{Kind: "live", Err: "boom"}, "!"},
+	}
+	for i, c := range cases {
+		if got := glyph(c.w); got != c.want {
+			t.Errorf("case %d: glyph = %q, want %q", i, got, c.want)
 		}
 	}
 }
@@ -118,32 +157,15 @@ func TestLockStale(t *testing.T) {
 	}
 }
 
-func TestWorktreeTags(t *testing.T) {
-	cases := []struct {
-		w    Worktree
-		want string
-	}{
-		{Worktree{Claude: true}, ""},
-		{Worktree{Claude: false}, "manual"},
-		{Worktree{Claude: true, Locked: true}, "locked"},
-		{Worktree{Claude: true, Locked: true, LockReason: "x (pid 2147483646)"}, "lock-stale"},
-		{Worktree{Claude: true, GitPrunable: true}, "git-prunable"},
-		{Worktree{Claude: false, GitPrunable: true}, "manual git-prunable"},
-	}
-	for i, c := range cases {
-		if got := strings.Join(worktreeTags(c.w), " "); got != c.want {
-			t.Errorf("case %d: worktreeTags = %q, want %q", i, got, c.want)
-		}
-	}
-}
-
 func TestPalette(t *testing.T) {
 	off := palette{enabled: false}
-	if got := off.green("x"); got != "x" {
-		t.Errorf("disabled palette coloured output: %q", got)
+	for _, s := range []string{off.green("x"), off.bold("x"), off.dim("x"), off.cyan("x")} {
+		if s != "x" {
+			t.Errorf("disabled palette coloured output: %q", s)
+		}
 	}
 	on := palette{enabled: true}
-	if got := on.green("x"); got == "x" || !strings.Contains(got, "x") {
+	if got := on.bold("x"); got == "x" || !strings.Contains(got, "x") {
 		t.Errorf("enabled palette did not wrap: %q", got)
 	}
 	if got := on.green(""); got != "" {
@@ -151,16 +173,16 @@ func TestPalette(t *testing.T) {
 	}
 }
 
-func TestPaintStatus(t *testing.T) {
-	pal := palette{enabled: false} // disabled palette: paintStatus is a pass-through
+func TestPaintSeverity(t *testing.T) {
+	pal := palette{enabled: false} // disabled palette: paintSeverity is a pass-through
 	for i, w := range []Worktree{
 		{Kind: "live", Merged: true},
 		{Kind: "abandoned-orphan"},
-		{Err: "boom"},
+		{Kind: "live", Err: "boom"},
 		{Kind: "live"},
 	} {
-		if got := paintStatus(pal, w, "LBL"); got != "LBL" {
-			t.Errorf("case %d: paintStatus = %q, want LBL", i, got)
+		if got := paintSeverity(pal, w, "X"); got != "X" {
+			t.Errorf("case %d: paintSeverity = %q, want X", i, got)
 		}
 	}
 }
@@ -229,7 +251,7 @@ func discoverAnalyzed(t *testing.T, root, base string) map[string]Worktree {
 }
 
 // TestScanAndAnalyze builds a repo with a merged worktree and an
-// unmerged-dirty worktree and verifies detection end to end.
+// unmerged worktree with an untracked file, and verifies detection end to end.
 func TestScanAndAnalyze(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -244,7 +266,7 @@ func TestScanAndAnalyze(t *testing.T) {
 	unmergedWT := filepath.Join(wtDir, "unmerged")
 	run(t, repo, "git", "worktree", "add", "-q", "-b", "feat-unmerged", unmergedWT, "main")
 	commit(t, unmergedWT, "new.txt", "ahead")
-	if err := os.WriteFile(filepath.Join(unmergedWT, "dirty.txt"), []byte("y\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(unmergedWT, "stray.txt"), []byte("y\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -276,8 +298,33 @@ func TestScanAndAnalyze(t *testing.T) {
 	if u.Err != "" {
 		t.Fatalf("unmerged worktree errored: %s", u.Err)
 	}
-	if u.Merged || !u.Dirty || u.Prunable() {
-		t.Errorf("unmerged: Merged=%v Dirty=%v Prunable=%v", u.Merged, u.Dirty, u.Prunable())
+	if u.Merged || u.Prunable() {
+		t.Errorf("unmerged: Merged=%v Prunable=%v", u.Merged, u.Prunable())
+	}
+	if !u.Untracked || u.Modified || !u.Dirty {
+		t.Errorf("unmerged: Untracked=%v Modified=%v Dirty=%v, want true/false/true",
+			u.Untracked, u.Modified, u.Dirty)
+	}
+}
+
+// TestModifiedVsUntracked verifies a tracked-file edit is reported as Modified,
+// not Untracked.
+func TestModifiedVsUntracked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "w")
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "w", wt, "main")
+	// Edit a tracked file (README exists from initRepo).
+	if err := os.WriteFile(filepath.Join(wt, "README"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := discoverAnalyzed(t, root, "")["w"]
+	if !w.Modified || w.Untracked {
+		t.Errorf("Modified=%v Untracked=%v, want true/false", w.Modified, w.Untracked)
 	}
 }
 

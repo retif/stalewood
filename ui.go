@@ -55,8 +55,8 @@ func (r *reporter) note(format string, a ...any) {
 	fmt.Fprintf(r.w, format+"\n", a...)
 }
 
-// palette renders ANSI colour, enabled only for an interactive stdout with
-// NO_COLOR unset (https://no-color.org).
+// palette renders ANSI colour and weight, enabled only for an interactive
+// stdout with NO_COLOR unset (https://no-color.org).
 type palette struct{ enabled bool }
 
 func newPalette() palette {
@@ -64,6 +64,7 @@ func newPalette() palette {
 	return palette{enabled: isTTY(os.Stdout) && !noColor}
 }
 
+// paint wraps s in the given SGR code(s), e.g. "32" or "1;36".
 func (p palette) paint(code, s string) string {
 	if !p.enabled || s == "" {
 		return s
@@ -71,9 +72,13 @@ func (p palette) paint(code, s string) string {
 	return "\033[" + code + "m" + s + "\033[0m"
 }
 
-func (p palette) green(s string) string  { return p.paint("32", s) }
-func (p palette) yellow(s string) string { return p.paint("33", s) }
-func (p palette) red(s string) string    { return p.paint("31", s) }
+func (p palette) green(s string) string    { return p.paint("32", s) }
+func (p palette) yellow(s string) string   { return p.paint("33", s) }
+func (p palette) red(s string) string      { return p.paint("31", s) }
+func (p palette) cyan(s string) string     { return p.paint("36", s) }
+func (p palette) bold(s string) string     { return p.paint("1", s) }
+func (p palette) dim(s string) string      { return p.paint("2", s) }
+func (p palette) boldCyan(s string) string { return p.paint("1;36", s) }
 
 // withPager runs fn with a writer that is the system pager's stdin when stdout
 // is an interactive terminal and paging is not disabled, or stdout directly

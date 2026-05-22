@@ -15,8 +15,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"text/tabwriter"
 )
 
 const version = "0.1.0"
@@ -29,7 +29,7 @@ func main() {
 	prune := fs.Bool("prune", false, "remove worktrees whose work is merged")
 	dryRun := fs.Bool("dry-run", false, "with --prune, show what would be removed without removing it")
 	force := fs.Bool("force", false, "with --prune, also remove merged worktrees that are dirty or locked")
-	jsonOut := fs.Bool("json", false, "emit JSON instead of a table")
+	jsonOut := fs.Bool("json", false, "emit JSON instead of the tree")
 	withSize := fs.Bool("size", false, "measure each worktree's disk usage")
 	base := fs.String("base", "", "ref to test every worktree against (default: per-worktree base)")
 	verbose := fs.Bool("verbose", false, "log per-worktree detail to stderr")
@@ -97,7 +97,7 @@ func main() {
 	case *jsonOut:
 		emitJSON(abs, wts)
 	default:
-		withPager(*noPager, func(w io.Writer) { emitTable(w, abs, wts, *withSize, pal) })
+		withPager(*noPager, func(w io.Writer) { emitTree(w, abs, wts, *withSize, pal) })
 	}
 }
 
@@ -117,10 +117,9 @@ Examples:
 
   path   directory tree to scan (default ".")
 
-Worktrees are discovered from three sources: directories under
-.claude/worktrees, git worktree list of every repo found, and abandoned
-worktrees (orphan directories and stale entries). Running with no flags is a
-read-only report - it shows exactly what --prune would remove.
+The report is a tree grouped by repo: each worktree shows a glyph (merged,
+unmerged, abandoned, error), its full path, branch and base, plus tags such as
+[claude], [modified], [untracked], [lock-stale]. A legend prints below it.
 
 Flags:
   --prune        remove worktrees whose work is merged
@@ -128,17 +127,12 @@ Flags:
   --force        with --prune, also remove merged worktrees that are dirty/locked
   --size         measure each worktree's disk usage
   --base REF     test every worktree against REF instead of its own base
-  --json         emit JSON instead of a table
+  --json         emit JSON instead of the tree
   --verbose      log per-worktree detail to stderr
   --quiet        suppress progress output
   --no-pager     do not page long output
   --version      print version and exit
   -h, --help     show this help
-
-STATUS tags:
-  *             uncommitted changes        [manual]        not a Claude worktree
-  [locked]      worktree lock held         [lock-stale]    locked, owner dead
-  [git-prunable] git flags it prunable     -> REF          merged into REF
 
 Exit codes:
   0  success
@@ -190,12 +184,64 @@ func baseLabel(w Worktree) string {
 	}
 }
 
-// worktreeTags returns the bracketed indicators appended to a worktree's
-// status: provenance, lock state, and git's own prunable flag.
+// verdictText is the merge verdict word(s) for a worktree.
+func verdictText(w Worktree) string {
+	if w.Err != "" {
+		return "error"
+	}
+	switch w.Kind {
+	case "abandoned-orphan":
+		return "abandoned (orphan dir)"
+	case "abandoned-stale":
+		return "abandoned (stale entry)"
+	default:
+		return w.Status()
+	}
+}
+
+// glyph is the single-character status marker for a worktree.
+func glyph(w Worktree) string {
+	switch {
+	case w.Err != "":
+		return "!"
+	case w.Kind != "live":
+		return "⚠" // warning sign
+	case w.Merged:
+		return "✓" // check mark
+	default:
+		return "✗" // ballot x
+	}
+}
+
+// severityCode is the SGR code (bold + colour) for a worktree's verdict.
+func severityCode(w Worktree) string {
+	switch {
+	case w.Err != "":
+		return "1;31" // bold red
+	case w.Kind != "live":
+		return "1;33" // bold yellow
+	case w.Merged:
+		return "1;32" // bold green
+	default:
+		return "1" // bold, default colour
+	}
+}
+
+func paintSeverity(pal palette, w Worktree, s string) string {
+	return pal.paint(severityCode(w), s)
+}
+
+// worktreeTags returns the bracketed indicators for a worktree.
 func worktreeTags(w Worktree) []string {
 	var tags []string
-	if !w.Claude {
-		tags = append(tags, "manual") // a worktree not created by Claude Code
+	if w.Claude {
+		tags = append(tags, "claude")
+	}
+	if w.Modified {
+		tags = append(tags, "modified")
+	}
+	if w.Untracked {
+		tags = append(tags, "untracked")
 	}
 	switch {
 	case w.LockStale():
@@ -209,42 +255,33 @@ func worktreeTags(w Worktree) []string {
 	return tags
 }
 
-// statusLabel renders the plain (uncoloured) STATUS text: the merge verdict,
-// then any "-> ref", then bracketed indicator tags.
+// paintTag colours one tag: yellow for attention, cyan for provenance, dim otherwise.
+func paintTag(pal palette, tag string) string {
+	t := "[" + tag + "]"
+	switch tag {
+	case "modified", "untracked", "lock-stale", "git-prunable":
+		return pal.yellow(t)
+	case "claude":
+		return pal.cyan(t)
+	default: // locked
+		return pal.dim(t)
+	}
+}
+
+// statusLabel renders a worktree's plain (uncoloured) status — verdict, an
+// optional "-> ref", and bracketed tags. Used for --verbose log lines.
 func statusLabel(w Worktree) string {
 	if w.Err != "" {
 		return "error: " + w.Err
 	}
-	var s string
-	switch w.Kind {
-	case "abandoned-orphan":
-		s = "abandoned (orphan dir)"
-	case "abandoned-stale":
-		s = "abandoned (stale entry)"
-	default:
-		s = w.Status()
-	}
+	s := verdictText(w)
 	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
 		s += " -> " + w.MergedInto
 	}
-	for _, tag := range worktreeTags(w) {
-		s += " [" + tag + "]"
+	for _, t := range worktreeTags(w) {
+		s += " [" + t + "]"
 	}
 	return s
-}
-
-// paintStatus colours a STATUS label: green merged, yellow abandoned, red error.
-func paintStatus(pal palette, w Worktree, label string) string {
-	switch {
-	case w.Err != "":
-		return pal.red(label)
-	case w.Kind != "live":
-		return pal.yellow(label)
-	case w.Merged:
-		return pal.green(label)
-	default:
-		return label
-	}
 }
 
 // abandonedFix returns the suggested manual cleanup for an abandoned worktree.
@@ -258,55 +295,110 @@ func abandonedFix(w Worktree) string {
 	return ""
 }
 
-// emitTable writes the human-readable report to out. STATUS is the last column
-// so its colour codes never disturb tabwriter alignment.
-func emitTable(out io.Writer, root string, wts []Worktree, withSize bool, pal palette) {
+type wtField struct{ label, value string }
+
+// worktreeFields are the leaf lines printed under a worktree node.
+func worktreeFields(w Worktree, withSize bool) []wtField {
+	f := []wtField{{"path", w.Path}}
+	switch {
+	case w.Err != "":
+		f = append(f, wtField{"error", w.Err})
+	case w.Kind != "live":
+		if fix := abandonedFix(w); fix != "" {
+			f = append(f, wtField{"fix", fix})
+		}
+	default:
+		branch := w.Branch
+		if w.Detached {
+			branch = "(detached)"
+		}
+		if branch == "" {
+			branch = "-"
+		}
+		f = append(f, wtField{"branch", branch}, wtField{"base", baseLabel(w)})
+	}
+	if withSize {
+		f = append(f, wtField{"size", humanSize(w.SizeBytes)})
+	}
+	return f
+}
+
+// emitWorktreeNode prints one worktree as a tree node with its field leaves.
+func emitWorktreeNode(out io.Writer, w Worktree, last, withSize bool, pal palette) {
+	conn, cont := "├─", "│  " // "├─", "│  "
+	if last {
+		conn, cont = "└─", "   " // "└─"
+	}
+	verdict := verdictText(w)
+	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
+		verdict += " -> " + w.MergedInto
+	}
+	line := fmt.Sprintf("  %s %s %s  %s",
+		pal.dim(conn), paintSeverity(pal, w, glyph(w)),
+		pal.bold(w.Name), paintSeverity(pal, w, verdict))
+	for _, t := range worktreeTags(w) {
+		line += " " + paintTag(pal, t)
+	}
+	fmt.Fprintln(out, line)
+
+	fields := worktreeFields(w, withSize)
+	for i, f := range fields {
+		fc := "├──" // "├──"
+		if i == len(fields)-1 {
+			fc = "└──" // "└──"
+		}
+		fmt.Fprintf(out, "  %s%s %s%s\n",
+			pal.dim(cont), pal.dim(fc), pal.dim(fmt.Sprintf("%-8s", f.label)), f.value)
+	}
+}
+
+// emitTree writes the human-readable report: a tree grouped by repo, then a
+// summary and a present-only legend.
+func emitTree(out io.Writer, root string, wts []Worktree, withSize bool, pal palette) {
 	if len(wts) == 0 {
 		fmt.Fprintln(out, "No worktrees found under", root)
 		return
 	}
-	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	header := "REPO\tWORKTREE\tBRANCH\tBASE"
-	if withSize {
-		header += "\tSIZE"
+	byRepo := map[string][]Worktree{}
+	var repoOrder []string
+	for _, w := range wts {
+		if _, ok := byRepo[w.Repo]; !ok {
+			repoOrder = append(repoOrder, w.Repo)
+		}
+		byRepo[w.Repo] = append(byRepo[w.Repo], w)
 	}
-	header += "\tSTATUS"
-	fmt.Fprintln(tw, header)
+	sort.Strings(repoOrder)
 
 	var merged, unmerged, abandoned, errored int
 	var reclaimable int64
-	for _, w := range wts {
-		switch {
-		case w.Err != "":
-			errored++
-		case w.Kind != "live":
-			abandoned++
-		case w.Merged:
-			merged++
-			if w.SizeBytes > 0 {
-				reclaimable += w.SizeBytes
+	for ri, repo := range repoOrder {
+		group := byRepo[repo]
+		sort.Slice(group, func(i, j int) bool { return group[i].Name < group[j].Name })
+		fmt.Fprintf(out, "%s %s   %s\n",
+			pal.boldCyan("●"), pal.bold(repoLabel(root, repo)), pal.dim(repo))
+		for wi, w := range group {
+			emitWorktreeNode(out, w, wi == len(group)-1, withSize, pal)
+			switch {
+			case w.Err != "":
+				errored++
+			case w.Kind != "live":
+				abandoned++
+			case w.Merged:
+				merged++
+				if w.SizeBytes > 0 {
+					reclaimable += w.SizeBytes
+				}
+			default:
+				unmerged++
 			}
-		default:
-			unmerged++
 		}
-		branch := w.Branch
-		if branch == "" {
-			branch = "-"
+		if ri < len(repoOrder)-1 {
+			fmt.Fprintln(out)
 		}
-		if w.Detached {
-			branch = "(detached)"
-		}
-		row := fmt.Sprintf("%s\t%s\t%s\t%s", repoLabel(root, w.Repo), w.Name, branch, baseLabel(w))
-		if withSize {
-			row += "\t" + humanSize(w.SizeBytes)
-		}
-		row += "\t" + paintStatus(pal, w, statusLabel(w))
-		fmt.Fprintln(tw, row)
 	}
-	tw.Flush()
 
 	fmt.Fprintf(out, "\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged - %d abandoned",
-		len(wts), countRepos(wts), merged, unmerged, abandoned)
+		len(wts), len(repoOrder), merged, unmerged, abandoned)
 	if errored > 0 {
 		fmt.Fprintf(out, " - %d error", errored)
 	}
@@ -319,17 +411,65 @@ func emitTable(out io.Writer, root string, wts []Worktree, withSize bool, pal pa
 		fmt.Fprintf(out, "%d merged worktree(s) removable%s - run with --prune to reap them.\n", merged, hint)
 	}
 	if abandoned > 0 {
-		fmt.Fprintf(out, "%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
+		fmt.Fprintf(out, "%d abandoned worktree(s) - not auto-removed; see the fix on each.\n", abandoned)
 	}
-	printLegend(out, wts)
+	printLegend(out, wts, pal)
 }
 
-func countRepos(wts []Worktree) int {
-	seen := map[string]bool{}
+// printLegend describes the glyphs and tags that actually appear in the report.
+func printLegend(out io.Writer, wts []Worktree, pal palette) {
+	tagSeen := map[string]bool{}
+	var anyMerged, anyUnmerged, anyAbandoned, anyError bool
 	for _, w := range wts {
-		seen[w.Repo] = true
+		for _, t := range worktreeTags(w) {
+			tagSeen[t] = true
+		}
+		switch {
+		case w.Err != "":
+			anyError = true
+		case w.Kind != "live":
+			anyAbandoned = true
+		case w.Merged:
+			anyMerged = true
+		default:
+			anyUnmerged = true
+		}
 	}
-	return len(seen)
+	type row struct{ plain, colored, desc string }
+	var rows []row
+	add := func(show bool, plain, colored, desc string) {
+		if show {
+			rows = append(rows, row{plain, colored, desc})
+		}
+	}
+	add(anyMerged, "✓", pal.paint("1;32", "✓"), "merged - work is integrated")
+	add(anyUnmerged, "✗", pal.bold("✗"), "unmerged - not yet integrated")
+	add(anyAbandoned, "⚠", pal.paint("1;33", "⚠"), "abandoned - orphan dir or stale git entry")
+	add(anyError, "!", pal.paint("1;31", "!"), "error - could not be analyzed")
+	for _, td := range []struct{ tag, desc string }{
+		{"claude", "created by Claude Code (.claude/worktrees/)"},
+		{"modified", "tracked files have uncommitted changes"},
+		{"untracked", "the worktree has untracked files"},
+		{"locked", "a git worktree lock is held"},
+		{"lock-stale", "locked, but the locking process is gone"},
+		{"git-prunable", "git's own worktree list flags it prunable"},
+	} {
+		add(tagSeen[td.tag], "["+td.tag+"]", paintTag(pal, td.tag), td.desc)
+	}
+	if len(rows) == 0 {
+		return
+	}
+	maxw := 0
+	for _, r := range rows {
+		if n := len([]rune(r.plain)); n > maxw {
+			maxw = n
+		}
+	}
+	fmt.Fprintln(out)
+	for _, r := range rows {
+		pad := strings.Repeat(" ", maxw-len([]rune(r.plain))+2)
+		fmt.Fprintf(out, "  %s%s%s\n", r.colored, pad, r.desc)
+	}
 }
 
 type jsonReport struct {
@@ -481,39 +621,4 @@ func humanSize(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%c", float64(b)/float64(div), "KMGTPE"[exp])
-}
-
-// printLegend writes a short description of each STATUS marker that actually
-// appears in this report — and only those.
-func printLegend(out io.Writer, wts []Worktree) {
-	items := []struct{ marker, needle, desc string }{
-		{"*", "*", "the worktree has uncommitted changes"},
-		{"-> REF", "-> ", "merged into another branch, not its own base"},
-		{"[manual]", "[manual]", "not a Claude Code worktree (created by hand)"},
-		{"[locked]", "[locked]", "a git worktree lock is held"},
-		{"[lock-stale]", "[lock-stale]", "locked, but the process holding the lock is gone"},
-		{"[git-prunable]", "[git-prunable]", "git's own worktree list flags the entry prunable"},
-	}
-	labels := make([]string, len(wts))
-	for i, w := range wts {
-		labels[i] = statusLabel(w)
-	}
-	var shown [][2]string
-	for _, it := range items {
-		for _, l := range labels {
-			if strings.Contains(l, it.needle) {
-				shown = append(shown, [2]string{it.marker, it.desc})
-				break
-			}
-		}
-	}
-	if len(shown) == 0 {
-		return
-	}
-	fmt.Fprintln(out)
-	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	for _, s := range shown {
-		fmt.Fprintf(tw, "  %s\t%s\n", s[0], s[1])
-	}
-	tw.Flush()
 }

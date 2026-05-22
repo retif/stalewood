@@ -31,7 +31,7 @@ stalewood [flags] [path]
 |--------------|-------------------------------------------------------------------|
 | `--size`     | measure each worktree's disk usage                                |
 | `--base REF` | test every worktree against `REF` instead of its own base         |
-| `--json`     | emit JSON instead of a table                                      |
+| `--json`     | emit JSON instead of the tree                                     |
 | `--prune`    | remove worktrees whose work is merged                             |
 | `--force`    | with `--prune`, also remove merged worktrees that are dirty/locked |
 | `--dry-run`  | with `--prune`, show what would be removed without removing it    |
@@ -53,6 +53,40 @@ stalewood --prune ~/projects            # remove merged worktrees
 stalewood --json ~/projects             # machine-readable output
 ```
 
+## The report
+
+The report is a tree grouped by repo. Each `●` node is a repo (with its full
+path); each `├─`/`└─` node is a worktree showing a glyph, name, verdict and
+tags; the `├──` leaves give the worktree's full path, branch and base.
+
+```
+● gitea   /home/oleks/projects/gitea
+  ├─ ✗ gitea-toasts  unmerged [untracked]
+  │  ├── path    /home/oleks/projects/gitea-toasts
+  │  ├── branch  sse-toasts
+  │  └── base    oleks/main
+  └─ ✓ gitea-issue-fixes  merged -> oleks/main
+     ├── path    /home/oleks/projects/gitea/.claude/worktrees/gitea-issue-fixes
+     ├── branch  fix/issue-19-sse-state
+     └── base    fix/user-project-move-multiproject-detach (sha)
+```
+
+A summary and a legend follow; the legend describes only the glyphs and tags
+that actually appear in that run.
+
+| Marker          | Meaning                                                       |
+|-----------------|---------------------------------------------------------------|
+| `✓` / `✗`       | merged / unmerged                                             |
+| `⚠`             | abandoned (orphan dir or stale git entry)                     |
+| `!`             | error — the worktree could not be analyzed                    |
+| `-> REF`        | merged, but into `REF` — a branch other than its own base     |
+| `[claude]`      | created by Claude Code (under `.claude/worktrees/`)           |
+| `[modified]`    | tracked files have uncommitted changes                        |
+| `[untracked]`   | the worktree has untracked files                              |
+| `[locked]`      | a git worktree lock is held                                   |
+| `[lock-stale]`  | locked, but the process that took the lock is gone            |
+| `[git-prunable]`| git's own `worktree list` flags the entry prunable            |
+
 ## Discovery
 
 Worktrees are found from three sources, unioned and de-duplicated by path:
@@ -71,9 +105,8 @@ Worktrees are found from three sources, unioned and de-duplicated by path:
    - **stale entry** (`abandoned-stale`) — a `git worktree list` entry whose
      directory is gone.
 
-   Abandoned worktrees carry no merge analysis; they are reported with a
-   suggested fix (`git worktree prune` for stale entries; manual removal for
-   orphan dirs).
+   Abandoned worktrees carry no merge analysis; they show a `fix` leaf with
+   the suggested cleanup.
 
 ## Merge classification
 
@@ -85,23 +118,10 @@ A live worktree counts as **merged** if either:
   (`git for-each-ref --contains`) — catches work integrated into a branch
   other than the base.
 
-The STATUS column shows the verdict followed by indicator tags:
-
-| Tag             | Meaning                                                       |
-|-----------------|---------------------------------------------------------------|
-| `*`             | the worktree has uncommitted changes                         |
-| `-> REF`        | merged, but into `REF` — a branch other than its own base     |
-| `[manual]`      | a worktree outside `.claude/worktrees/` (you created it)      |
-| `[locked]`      | a git worktree lock is held                                   |
-| `[lock-stale]`  | locked, but the process that took the lock is gone            |
-| `[git-prunable]`| git's own `worktree list` flags the entry prunable            |
-
-Each report ends with a legend describing only the markers it actually used.
-
 ### Base detection
 
 By default each worktree is tested against the branch it was forked from. The
-base is recovered in this order; the `BASE` column suffix shows which step won:
+base is recovered in this order; the `base` leaf suffix shows which step won:
 
 | Source        | Suffix       | How                                              |
 |---------------|--------------|--------------------------------------------------|
@@ -130,15 +150,15 @@ with no flags at all) reports exactly what `--prune` would remove without
 touching anything. Unmerged worktrees are kept; a merged worktree that is
 dirty or locked is skipped unless `--force` is given — a `[lock-stale]` skip
 says so, since forcing it is safe. **Abandoned worktrees are never removed by
-`--prune`** — they are reported with a suggested fix. Exit status is non-zero
-if any removal failed.
+`--prune`.** Exit status is non-zero if any removal failed.
 
 ## Terminal behaviour
 
 stalewood adapts to where its output goes:
 
-- **Colour** — the STATUS column is coloured on an interactive terminal;
-  disabled when piped or when `NO_COLOR` is set.
+- **Colour & weight** — glyphs and verdicts are bold and colour-coded by
+  severity, repo nodes bold-cyan, connectors dim. On an interactive terminal
+  only; disabled when piped or when `NO_COLOR` is set.
 - **Progress** — a transient progress line is shown on an interactive stderr
   during a scan. `--quiet` silences it; `--verbose` replaces it with durable
   per-worktree log lines on stderr.
