@@ -1,0 +1,10 @@
+// markdownlint config for stalewood.
+// MD013 (80-col line length) and MD060 (aligned table pipes) are disabled:
+// the README has wide flag tables and tree-output examples that cannot honor
+// an 80-column limit. All other markdownlint rules stay in force.
+{
+  "config": {
+    "MD013": false,
+    "MD060": false
+  }
+}

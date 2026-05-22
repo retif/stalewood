@@ -82,7 +82,7 @@ The report is a tree grouped by repo. Each `●` node is a repo (with its full
 path); each `├─`/`└─` node is a worktree showing a glyph, name, verdict and
 tags; the `├──` leaves give the worktree's full path, branch and base.
 
-```
+```text
 ● gitea   /home/you/projects/gitea
   ├─ ✗ gitea-toasts  unmerged [untracked]
   │  ├── path    /home/you/projects/gitea-toasts
