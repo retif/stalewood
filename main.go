@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -320,6 +321,7 @@ func emitTable(out io.Writer, root string, wts []Worktree, withSize bool, pal pa
 	if abandoned > 0 {
 		fmt.Fprintf(out, "%d abandoned worktree(s) - not auto-removed; see STATUS for the fix.\n", abandoned)
 	}
+	printLegend(out, wts)
 }
 
 func countRepos(wts []Worktree) int {
@@ -479,4 +481,39 @@ func humanSize(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%c", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// printLegend writes a short description of each STATUS marker that actually
+// appears in this report — and only those.
+func printLegend(out io.Writer, wts []Worktree) {
+	items := []struct{ marker, needle, desc string }{
+		{"*", "*", "the worktree has uncommitted changes"},
+		{"-> REF", "-> ", "merged into another branch, not its own base"},
+		{"[manual]", "[manual]", "not a Claude Code worktree (created by hand)"},
+		{"[locked]", "[locked]", "a git worktree lock is held"},
+		{"[lock-stale]", "[lock-stale]", "locked, but the process holding the lock is gone"},
+		{"[git-prunable]", "[git-prunable]", "git's own worktree list flags the entry prunable"},
+	}
+	labels := make([]string, len(wts))
+	for i, w := range wts {
+		labels[i] = statusLabel(w)
+	}
+	var shown [][2]string
+	for _, it := range items {
+		for _, l := range labels {
+			if strings.Contains(l, it.needle) {
+				shown = append(shown, [2]string{it.marker, it.desc})
+				break
+			}
+		}
+	}
+	if len(shown) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	for _, s := range shown {
+		fmt.Fprintf(tw, "  %s\t%s\n", s[0], s[1])
+	}
+	tw.Flush()
 }

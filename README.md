@@ -96,6 +96,8 @@ The STATUS column shows the verdict followed by indicator tags:
 | `[lock-stale]`  | locked, but the process that took the lock is gone            |
 | `[git-prunable]`| git's own `worktree list` flags the entry prunable            |
 
+Each report ends with a legend describing only the markers it actually used.
+
 ### Base detection
 
 By default each worktree is tested against the branch it was forked from. The
