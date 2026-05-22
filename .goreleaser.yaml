@@ -25,6 +25,18 @@ archives:
       - LICENSE
       - CLAUDE.md
 
+nfpms:
+  - package_name: stalewood
+    vendor: Oleks Kuksenko
+    homepage: "https://github.com/retif/stalewood"
+    maintainer: "Oleks Kuksenko <oleks.kuksenko@gmail.com>"
+    description: "Find and reap merged git worktrees."
+    license: MIT
+    section: utils
+    formats:
+      - deb
+      - rpm
+
 checksum:
   name_template: checksums.txt
 
