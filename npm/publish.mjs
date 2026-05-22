@@ -54,7 +54,7 @@ for (const p of platforms) {
           `the 'stalewood' package; do not install directly`,
         license: "MIT",
         repository,
-        homepage: "https://github.com/retif/stalewood",
+        homepage: "https://www.npmjs.com/package/stalewood",
         os: [p.os],
         cpu: [p.cpu],
         files: ["bin/"],
