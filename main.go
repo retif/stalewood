@@ -32,6 +32,8 @@ func main() {
 	jsonOut := fs.Bool("json", false, "emit JSON instead of the tree")
 	withSize := fs.Bool("size", false, "measure each worktree's disk usage")
 	base := fs.String("base", "", "ref to test every worktree against (default: per-worktree base)")
+	var lintSel stringList
+	fs.Var(&lintSel, "lint", "lint mode: flag worktrees matching this AND-group; repeat to OR")
 	verbose := fs.Bool("verbose", false, "log per-worktree detail to stderr")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
 	noPager := fs.Bool("no-pager", false, "print everything at once (disable the pager)")
@@ -72,6 +74,24 @@ func main() {
 	}
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
 		usageFail("%s: not a directory", root)
+	}
+
+	if len(lintSel) > 0 {
+		if *prune {
+			usageFail("--lint and --prune are mutually exclusive")
+		}
+		groups, err := parseLintGroups(lintSel)
+		if err != nil {
+			usageFail("%v", err)
+		}
+		wts, repoRoot, err := discoverRepo(abs)
+		if err != nil {
+			fatal(err)
+		}
+		for i := range wts {
+			analyze(&wts[i], *withSize, *base)
+		}
+		os.Exit(runLint(repoRoot, wts, groups, *jsonOut, newPalette()))
 	}
 
 	// JSON output is pure machine output: no progress, no verbose notes.
@@ -134,6 +154,7 @@ Flags:
   --force        with --prune, also remove merged worktrees that are dirty/locked
   --size         measure each worktree's disk usage
   --base REF     test every worktree against REF instead of its own base
+  --lint SEL     lint mode: exit 1 if a worktree matches SEL (repeatable)
   --json         emit JSON instead of the tree
   --verbose      log per-worktree detail to stderr
   --quiet        suppress progress output
@@ -142,6 +163,12 @@ Flags:
   --version      print version and exit
   --json-schema  print the JSON Schema for --json output, then exit
   -h, --help     show this help
+
+Lint mode (--lint) checks the git repo containing [path] and exits 1 if any
+worktree matches. Each --lint value is a comma-separated AND-group of
+predicates (prefix ! to negate); repeat --lint to OR the groups. Predicates:
+  merged unmerged live abandoned orphan stale dirty modified untracked locked
+  lock-stale claude manual detached error git-prunable removable any
 
 Exit codes:
   0  success

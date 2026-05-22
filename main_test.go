@@ -522,3 +522,73 @@ func TestJSONSchema(t *testing.T) {
 		t.Errorf("jsonSchema declares worktree property %q with no matching struct field", k)
 	}
 }
+
+func TestParseLintGroups(t *testing.T) {
+	if _, err := parseLintGroups([]string{"merged,untracked", "abandoned"}); err != nil {
+		t.Errorf("valid selector rejected: %v", err)
+	}
+	if _, err := parseLintGroups([]string{"merged,bogus"}); err == nil {
+		t.Errorf("unknown predicate accepted")
+	}
+	if _, err := parseLintGroups([]string{"", "  "}); err == nil {
+		t.Errorf("empty selector accepted")
+	}
+}
+
+func TestMatchLint(t *testing.T) {
+	merged := Worktree{Kind: "live", Merged: true}
+	claudeWIP := Worktree{Kind: "live", Claude: true, Untracked: true}
+	orphan := Worktree{Kind: "abandoned-orphan"}
+
+	mustParse := func(args ...string) []lintGroup {
+		g, err := parseLintGroups(args)
+		if err != nil {
+			t.Fatalf("parse %v: %v", args, err)
+		}
+		return g
+	}
+
+	g := mustParse("merged") // single predicate
+	if !matchLint(g, merged) || matchLint(g, orphan) {
+		t.Errorf("merged: matched the wrong worktrees")
+	}
+	g = mustParse("claude,!merged") // AND + NOT
+	if !matchLint(g, claudeWIP) || matchLint(g, merged) {
+		t.Errorf("claude,!merged: matched the wrong worktrees")
+	}
+	g = mustParse("abandoned", "merged") // OR across groups
+	if !matchLint(g, orphan) || !matchLint(g, merged) || matchLint(g, claudeWIP) {
+		t.Errorf("abandoned OR merged: matched the wrong worktrees")
+	}
+	g = mustParse("untracked,manual") // claudeWIP is untracked but not manual
+	if matchLint(g, claudeWIP) {
+		t.Errorf("untracked,manual matched a claude worktree")
+	}
+}
+
+func TestDiscoverRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "w")
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "w", wt, "main")
+
+	wts, repoRoot, err := discoverRepo(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(repoRoot) != "r" {
+		t.Errorf("repoRoot = %q, want basename r", repoRoot)
+	}
+	if len(wts) != 1 || wts[0].Name != "w" {
+		t.Fatalf("discoverRepo found %d worktrees, want 1 (w): %v", len(wts), wts)
+	}
+	if !wts[0].Claude || !wts[0].Registered {
+		t.Errorf("worktree: claude=%v registered=%v, want true/true", wts[0].Claude, wts[0].Registered)
+	}
+	if _, _, err := discoverRepo(root); err == nil {
+		t.Errorf("discoverRepo on a non-repo dir should error")
+	}
+}

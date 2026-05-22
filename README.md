@@ -31,6 +31,7 @@ stalewood [flags] [path]
 |--------------|-------------------------------------------------------------------|
 | `--size`     | measure each worktree's disk usage                                |
 | `--base REF` | test every worktree against `REF` instead of its own base         |
+| `--lint SEL` | lint mode: exit 1 if a worktree matches `SEL` (repeatable)         |
 | `--json`     | emit JSON instead of the tree                                     |
 | `--prune`    | remove worktrees whose work is merged                             |
 | `--force`    | with `--prune`, also remove merged worktrees that are dirty/locked |
@@ -153,6 +154,36 @@ touching anything. Unmerged worktrees are kept; a merged worktree that is
 dirty or locked is skipped unless `--force` is given — a `[lock-stale]` skip
 says so, since forcing it is safe. **Abandoned worktrees are never removed by
 `--prune`.** Exit status is non-zero if any removal failed.
+
+## Lint mode
+
+`--lint` turns stalewood into a checker for a single repo — built for git
+hooks. It scans only the git repo containing `[path]` (no directory walk, so it
+is fast enough for `pre-push`) and **exits 1 if any worktree matches**.
+
+Each `--lint` value is a comma-separated **AND-group** of predicates; repeat
+`--lint` to **OR** the groups; prefix a predicate with `!` to negate it.
+
+```sh
+stalewood --lint abandoned                    # fail if any abandoned worktree
+stalewood --lint abandoned --lint lock-stale  # abandoned OR lock-stale
+stalewood --lint removable,manual             # merged AND not a Claude worktree
+stalewood --lint merged,untracked             # merged AND has untracked files
+```
+
+Predicates: `merged` `unmerged` `live` `abandoned` `orphan` `stale` `dirty`
+`modified` `untracked` `locked` `lock-stale` `claude` `manual` `detached`
+`error` `git-prunable` `removable` `any`.
+
+Matching worktrees are printed; exit status is `1` on a match, `0` when clean
+(and silent), `2` on a bad selector. Use it in a global `pre-push` hook
+(`git config --global core.hooksPath <dir>`):
+
+```sh
+#!/bin/sh
+# <hooks>/pre-push - block pushes while stale worktrees linger
+exec stalewood --lint abandoned --lint lock-stale
+```
 
 ## Terminal behaviour
 

@@ -37,6 +37,13 @@ field leaves (path, branch, base, or fix/error). A summary and a present-only
 legend follow. JSON (`--json`) is grouped by repo, mirroring the tree, and prints no progress or verbose output — pure machine output. `--json-schema` prints the JSON Schema for that
 output; `schema.go` holds it and `TestJSONSchema` guards it against drift.
 
+## Lint mode
+`--lint` is a separate, repo-scoped fast path (no directory-tree walk) for git
+hooks: it checks the one repo containing the path and exits 1 if any worktree
+matches the selector, 0 if none, 2 on a bad selector. Predicates live in
+`lint.go` as pure functions of Worktree state. Selector grammar: comma = AND
+within one --lint value, a repeated --lint = OR, `!` = NOT.
+
 ## Status indicators
 Keep the vocabulary small; every glyph and tag must be a signal a reader acts on.
 - Glyphs: `✓` merged · `✗` unmerged · `⚠` abandoned · `!` error.
