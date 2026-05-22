@@ -1,0 +1,13 @@
+# yamllint config for stalewood.
+# SHA-pinned GitHub Actions put `uses:` lines past 80 columns (a 40-char
+# commit SHA plus a version comment). Pinning by digest is what OpenSSF
+# Scorecard recommends, so line-length is relaxed rather than pinning dropped.
+extends: default
+rules:
+  line-length:
+    max: 140
+  truthy:
+    check-keys: false
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
