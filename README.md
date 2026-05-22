@@ -37,7 +37,8 @@ stalewood [flags] [path]
 | `--dry-run`  | with `--prune`, show what would be removed without removing it    |
 | `--verbose`  | log per-worktree detail to stderr                                 |
 | `--quiet`    | suppress progress output                                          |
-| `--no-pager` | do not page long output                                           |
+| `--print`    | print the whole report at once (disable the pager)               |
+| `--no-pager` | alias for `--print`                                               |
 | `--version`  | print version and exit                                            |
 | `-h, --help` | show help                                                         |
 

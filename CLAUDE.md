@@ -56,7 +56,7 @@ The legend prints only the glyphs and tags that actually appear in the report.
 - **Progress**: a transient stderr line, shown only on an interactive stderr and not under `--verbose`/`--quiet`.
 - **`--verbose`** logs durable per-worktree detail to stderr; **`--quiet`** silences progress.
 - **Paging**: human output is paged through `$PAGER` (default `less -FIRX`) on an
-  interactive stdout, unless `--no-pager`. JSON is never paged.
+  interactive stdout, unless `--print` (alias `--no-pager`). JSON is never paged.
 
 ## Robustness
 - Every git subprocess runs under a timeout (`gitTimeout`) so a wedged repo

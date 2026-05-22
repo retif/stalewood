@@ -34,7 +34,8 @@ func main() {
 	base := fs.String("base", "", "ref to test every worktree against (default: per-worktree base)")
 	verbose := fs.Bool("verbose", false, "log per-worktree detail to stderr")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
-	noPager := fs.Bool("no-pager", false, "do not page long output")
+	noPager := fs.Bool("no-pager", false, "print everything at once (disable the pager)")
+	fs.BoolVar(noPager, "print", false, "alias for --no-pager")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	switch err := fs.Parse(os.Args[1:]); {
@@ -130,7 +131,8 @@ Flags:
   --json         emit JSON instead of the tree
   --verbose      log per-worktree detail to stderr
   --quiet        suppress progress output
-  --no-pager     do not page long output
+  --print        print the whole report at once (disable the pager)
+  --no-pager     alias for --print
   --version      print version and exit
   -h, --help     show this help
 
