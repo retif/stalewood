@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -484,5 +486,39 @@ func TestLockedWorktree(t *testing.T) {
 	}
 	if w.LockStale() {
 		t.Errorf("lock owned by pid 1 reported stale")
+	}
+}
+
+// TestJSONSchema checks that the published --json-schema is valid JSON and that
+// its worktree property set matches the Worktree struct's json tags, so the
+// schema cannot silently drift from the data.
+func TestJSONSchema(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(jsonSchema), &doc); err != nil {
+		t.Fatalf("jsonSchema is not valid JSON: %v", err)
+	}
+	defs, _ := doc["$defs"].(map[string]any)
+	wt, _ := defs["worktree"].(map[string]any)
+	props, _ := wt["properties"].(map[string]any)
+	if len(props) == 0 {
+		t.Fatal("jsonSchema: $defs.worktree.properties missing or empty")
+	}
+	declared := map[string]bool{}
+	for k := range props {
+		declared[k] = true
+	}
+	rt := reflect.TypeOf(Worktree{})
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if !declared[name] {
+			t.Errorf("Worktree.%s (json %q) is missing from jsonSchema", rt.Field(i).Name, name)
+		}
+		delete(declared, name)
+	}
+	for k := range declared {
+		t.Errorf("jsonSchema declares worktree property %q with no matching struct field", k)
 	}
 }

@@ -37,6 +37,7 @@ func main() {
 	noPager := fs.Bool("no-pager", false, "print everything at once (disable the pager)")
 	fs.BoolVar(noPager, "print", false, "alias for --no-pager")
 	showVersion := fs.Bool("version", false, "print version and exit")
+	printSchema := fs.Bool("json-schema", false, "print the JSON Schema for --json output and exit")
 
 	switch err := fs.Parse(os.Args[1:]); {
 	case errors.Is(err, flag.ErrHelp):
@@ -50,6 +51,10 @@ func main() {
 
 	if *showVersion {
 		fmt.Println("stalewood", version)
+		os.Exit(0)
+	}
+	if *printSchema {
+		fmt.Println(jsonSchema)
 		os.Exit(0)
 	}
 
@@ -135,6 +140,7 @@ Flags:
   --print        print the whole report at once (disable the pager)
   --no-pager     alias for --print
   --version      print version and exit
+  --json-schema  print the JSON Schema for --json output, then exit
   -h, --help     show this help
 
 Exit codes:

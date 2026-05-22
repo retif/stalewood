@@ -40,6 +40,7 @@ stalewood [flags] [path]
 | `--print`    | print the whole report at once (disable the pager)               |
 | `--no-pager` | alias for `--print`                                               |
 | `--version`  | print version and exit                                            |
+| `--json-schema` | print the JSON Schema for `--json` output                  |
 | `-h, --help` | show help                                                         |
 
 Exit codes: `0` success, `1` runtime failure, `2` usage error.
