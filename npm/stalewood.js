@@ -9,17 +9,17 @@ const exe = process.platform === "win32" ? "stalewood.exe" : "stalewood";
 
 let bin;
 try {
-  bin = require.resolve(`${pkg}/bin/${exe}`);
+	bin = require.resolve(`${pkg}/bin/${exe}`);
 } catch {
-  console.error(
-    `stalewood: no prebuilt binary for ${process.platform}-${process.arch}.`,
-  );
-  console.error("See https://github.com/retif/stalewood/releases");
-  process.exit(1);
+	console.error(
+		`stalewood: no prebuilt binary for ${process.platform}-${process.arch}.`,
+	);
+	console.error("See https://github.com/retif/stalewood/releases");
+	process.exit(1);
 }
 
 try {
-  execFileSync(bin, process.argv.slice(2), { stdio: "inherit" });
+	execFileSync(bin, process.argv.slice(2), { stdio: "inherit" });
 } catch (err) {
-  process.exit(typeof err.status === "number" ? err.status : 1);
+	process.exit(typeof err.status === "number" ? err.status : 1);
 }
