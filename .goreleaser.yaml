@@ -10,14 +10,16 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
-    # Unix only: the stale-lock PID check uses syscall.Kill, not on Windows.
-    goos: [linux, darwin]
+    goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     files:
       - README.md
       - LICENSE
@@ -34,3 +36,16 @@ changelog:
       - "^test:"
       - "^chore:"
       - "Merge "
+
+brews:
+  - repository:
+      owner: retif
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/retif/stalewood"
+    description: "Find and reap merged git worktrees"
+    license: MIT
+    test: |
+      system "#{bin}/stalewood", "--version"

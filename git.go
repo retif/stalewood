@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -433,11 +432,4 @@ func lockOwnerPID(reason string) (int, bool) {
 		return 0, false
 	}
 	return pid, true
-}
-
-// pidAlive reports whether a process with the given pid currently exists.
-// Signal 0 checks for existence without delivering a signal.
-func pidAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
 }

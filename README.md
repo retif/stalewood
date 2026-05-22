@@ -2,9 +2,11 @@
 
 > Find and reap merged git worktrees.
 
+<!-- markdownlint-disable MD013 -->
 [![Go Reference](https://pkg.go.dev/badge/github.com/retif/stalewood.svg)](https://pkg.go.dev/github.com/retif/stalewood)
 [![CI](https://github.com/retif/stalewood/actions/workflows/ci.yml/badge.svg)](https://github.com/retif/stalewood/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<!-- markdownlint-enable MD013 -->
 
 `stalewood` scans a directory tree for git worktrees and tells you which ones
 are safe to delete — those whose work is already integrated into another
@@ -21,11 +23,14 @@ It finds worktrees three ways: directories under `.claude/worktrees/`,
 # Go toolchain
 go install github.com/retif/stalewood@latest
 
+# Homebrew
+brew install retif/tap/stalewood
+
 # Nix
 nix run github:retif/stalewood -- --help
 ```
 
-Prebuilt binaries for Linux and macOS are on the
+Prebuilt binaries for Linux, macOS and Windows are on the
 [releases page](https://github.com/retif/stalewood/releases).
 
 ## Build from source
