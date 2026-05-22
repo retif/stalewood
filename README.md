@@ -1,23 +1,43 @@
 # stalewood
 
-Scans a directory tree for git worktrees and tells you which ones are safe to
-delete — i.e. whose work is already integrated into another branch. Optionally
-reaps them.
+> Find and reap merged git worktrees.
 
-## Build & run
+[![Go Reference](https://pkg.go.dev/badge/github.com/retif/stalewood.svg)](https://pkg.go.dev/github.com/retif/stalewood)
+[![CI](https://github.com/retif/stalewood/actions/workflows/ci.yml/badge.svg)](https://github.com/retif/stalewood/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+`stalewood` scans a directory tree for git worktrees and tells you which ones
+are safe to delete — those whose work is already integrated into another
+branch — and can reap them for you. A `--lint` mode drops into a git hook to
+keep stale worktrees from piling up.
+
+It finds worktrees three ways: directories under `.claude/worktrees/`,
+`git worktree list` of every repo it encounters, and abandoned worktrees
+(orphan directories and stale entries) — so nothing slips through.
+
+## Install
 
 ```sh
-cd stalewood
-go build -o stalewood .
-./stalewood --size ~/projects
+# Go toolchain
+go install github.com/retif/stalewood@latest
+
+# Nix
+nix run github:retif/stalewood -- --help
 ```
 
-`go build` produces a self-contained binary; copy it onto your `PATH` (e.g.
-`~/go/bin/`) to run it from anywhere. Or skip the build: `go run . ~/projects`.
+Prebuilt binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/retif/stalewood/releases).
 
-With Nix: `nix develop` for the dev shell, `nix build` / `nix run` for the
-tool. Common tasks are in the `justfile` — `just build`, `just test`,
-`just check`, `just run --size ~/projects`.
+## Build from source
+
+```sh
+git clone https://github.com/retif/stalewood
+cd stalewood && go build -o stalewood .
+```
+
+The binary is self-contained and dependency-free. With Nix, `nix develop`
+gives a dev shell and `nix build` builds the tool; common tasks are in the
+`justfile` (`just build`, `just test`, `just check`).
 
 ## Usage
 
@@ -50,7 +70,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 
 ```sh
 stalewood --size ~/projects             # report, with disk usage
-stalewood --base oleks/main ~/repo      # force a specific base
+stalewood --base origin/main ~/repo      # force a specific base
 stalewood --prune --dry-run ~/projects  # preview what --prune would remove
 stalewood --prune ~/projects            # remove merged worktrees
 stalewood --json ~/projects             # machine-readable output (grouped by repo)
@@ -63,13 +83,13 @@ path); each `├─`/`└─` node is a worktree showing a glyph, name, verdict 
 tags; the `├──` leaves give the worktree's full path, branch and base.
 
 ```
-● gitea   /home/oleks/projects/gitea
+● gitea   /home/you/projects/gitea
   ├─ ✗ gitea-toasts  unmerged [untracked]
-  │  ├── path    /home/oleks/projects/gitea-toasts
+  │  ├── path    /home/you/projects/gitea-toasts
   │  ├── branch  sse-toasts
-  │  └── base    oleks/main
-  └─ ✓ gitea-issue-fixes  merged -> oleks/main
-     ├── path    /home/oleks/projects/gitea/.claude/worktrees/gitea-issue-fixes
+  │  └── base    origin/main
+  └─ ✓ gitea-issue-fixes  merged -> origin/main
+     ├── path    /home/you/projects/gitea/.claude/worktrees/gitea-issue-fixes
      ├── branch  fix/issue-19-sse-state
      └── base    fix/user-project-move-multiproject-detach (sha)
 ```

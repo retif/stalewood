@@ -45,6 +45,10 @@ run *args:
 install:
     go install .
 
+# build a local release snapshot with goreleaser (needs goreleaser)
+dist:
+    goreleaser release --snapshot --clean
+
 # remove build artifacts
 clean:
     rm -f {{binary}}

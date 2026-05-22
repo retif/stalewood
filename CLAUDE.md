@@ -70,6 +70,12 @@ The legend prints only the glyphs and tags that actually appear in the report.
 - Every git subprocess runs under a timeout (`gitTimeout`) so a wedged repo
   becomes an error node instead of hanging the whole scan.
 
+## Releasing
+Tag `vX.Y.Z` and push the tag; `.github/workflows/release.yml` runs GoReleaser
+(`.goreleaser.yaml`), which cross-builds and publishes a GitHub Release. The
+`version` var is stamped via ldflags at release time; plain `go install` builds
+fall back to the module version. `just dist` builds a local snapshot.
+
 ## Keep it boring
 - The standard-library `flag` package is sufficient; do not add a CLI framework.
 - Stay dependency-free (the Nix build relies on `vendorHash = null`).

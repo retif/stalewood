@@ -15,11 +15,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 )
 
-const version = "0.1.0"
+// version is overridden at release time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	fs := flag.NewFlagSet("stalewood", flag.ContinueOnError)
@@ -52,7 +54,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Println("stalewood", version)
+		fmt.Println("stalewood", buildVersion())
 		os.Exit(0)
 	}
 	if *printSchema {
@@ -187,6 +189,20 @@ Exit codes:
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "stalewood:", err)
 	os.Exit(1)
+}
+
+// buildVersion returns the release version: the -ldflags value when set,
+// else the module version recorded by `go install`, else "dev".
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return version
 }
 
 // usageFail reports a bad invocation on stderr, prints usage, and exits 2.

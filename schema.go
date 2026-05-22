@@ -5,7 +5,7 @@ package main
 // property set in sync with the Worktree struct.
 const jsonSchema = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://git.oleks.space/oleks/stalewood/schemas/json-report.json",
+  "$id": "https://github.com/retif/stalewood/schemas/json-report.json",
   "title": "stalewood --json report",
   "description": "Report emitted by ` + "`stalewood --json`" + `, grouped by repo.",
   "type": "object",
