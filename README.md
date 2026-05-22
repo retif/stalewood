@@ -51,7 +51,7 @@ stalewood --size ~/projects             # report, with disk usage
 stalewood --base oleks/main ~/repo      # force a specific base
 stalewood --prune --dry-run ~/projects  # preview what --prune would remove
 stalewood --prune ~/projects            # remove merged worktrees
-stalewood --json ~/projects             # machine-readable output
+stalewood --json ~/projects             # machine-readable output (grouped by repo)
 ```
 
 ## The report

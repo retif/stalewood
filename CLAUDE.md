@@ -34,7 +34,7 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 The human report is a tree grouped by repo: a `●` repo node (full repo path),
 each worktree as a `├─`/`└─` node with a glyph + verdict + tags, and `├──`
 field leaves (path, branch, base, or fix/error). A summary and a present-only
-legend follow. JSON (`--json`) is the stable machine format — keep its schema additive.
+legend follow. JSON (`--json`) is grouped by repo, mirroring the tree, and prints no progress or verbose output — pure machine output.
 
 ## Status indicators
 Keep the vocabulary small; every glyph and tag must be a signal a reader acts on.

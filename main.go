@@ -69,7 +69,8 @@ func main() {
 		usageFail("%s: not a directory", root)
 	}
 
-	r := newReporter(*verbose, *quiet)
+	// JSON output is pure machine output: no progress, no verbose notes.
+	r := newReporter(*verbose, *quiet || *jsonOut)
 	pal := newPalette()
 
 	wts, err := discoverWorktrees(abs, r)
@@ -120,7 +121,7 @@ Examples:
 
 The report is a tree grouped by repo: each worktree shows a glyph (merged,
 unmerged, abandoned, error), its full path, branch and base, plus tags such as
-[claude], [modified files], [untracked files], [lock-stale]. A legend prints below it.
+[claude], [modified files], [untracked files], [lock-stale]. A legend follows.
 
 Flags:
   --prune        remove worktrees whose work is merged
@@ -327,9 +328,9 @@ func worktreeFields(w Worktree, withSize bool) []wtField {
 
 // emitWorktreeNode prints one worktree as a tree node with its field leaves.
 func emitWorktreeNode(out io.Writer, w Worktree, last, withSize bool, pal palette) {
-	conn, cont := "├─", "│  " // "├─", "│  "
+	conn, cont := "├─", "│  "
 	if last {
-		conn, cont = "└─", "   " // "└─"
+		conn, cont = "└─", "   "
 	}
 	verdict := verdictText(w)
 	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
@@ -345,13 +346,40 @@ func emitWorktreeNode(out io.Writer, w Worktree, last, withSize bool, pal palett
 
 	fields := worktreeFields(w, withSize)
 	for i, f := range fields {
-		fc := "├──" // "├──"
+		fc := "├──"
 		if i == len(fields)-1 {
-			fc = "└──" // "└──"
+			fc = "└──"
 		}
 		fmt.Fprintf(out, "  %s%s %s%s\n",
 			pal.dim(cont), pal.dim(fc), pal.dim(fmt.Sprintf("%-8s", f.label)), f.value)
 	}
+}
+
+// repoGroup is the worktrees of one repo. groupByRepo is the single ordering
+// used by every report format.
+type repoGroup struct {
+	repo      string
+	worktrees []Worktree
+}
+
+// groupByRepo groups worktrees by repo — repos sorted by path, worktrees by name.
+func groupByRepo(wts []Worktree) []repoGroup {
+	byRepo := map[string][]Worktree{}
+	var order []string
+	for _, w := range wts {
+		if _, ok := byRepo[w.Repo]; !ok {
+			order = append(order, w.Repo)
+		}
+		byRepo[w.Repo] = append(byRepo[w.Repo], w)
+	}
+	sort.Strings(order)
+	groups := make([]repoGroup, 0, len(order))
+	for _, repo := range order {
+		g := byRepo[repo]
+		sort.Slice(g, func(i, j int) bool { return g[i].Name < g[j].Name })
+		groups = append(groups, repoGroup{repo: repo, worktrees: g})
+	}
+	return groups
 }
 
 // emitTree writes the human-readable report: a tree grouped by repo, then a
@@ -361,25 +389,15 @@ func emitTree(out io.Writer, root string, wts []Worktree, withSize bool, pal pal
 		fmt.Fprintln(out, "No worktrees found under", root)
 		return
 	}
-	byRepo := map[string][]Worktree{}
-	var repoOrder []string
-	for _, w := range wts {
-		if _, ok := byRepo[w.Repo]; !ok {
-			repoOrder = append(repoOrder, w.Repo)
-		}
-		byRepo[w.Repo] = append(byRepo[w.Repo], w)
-	}
-	sort.Strings(repoOrder)
+	groups := groupByRepo(wts)
 
 	var merged, unmerged, abandoned, errored int
 	var reclaimable int64
-	for ri, repo := range repoOrder {
-		group := byRepo[repo]
-		sort.Slice(group, func(i, j int) bool { return group[i].Name < group[j].Name })
+	for ri, g := range groups {
 		fmt.Fprintf(out, "%s %s   %s\n",
-			pal.boldCyan("●"), pal.bold(repoLabel(root, repo)), pal.dim(repo))
-		for wi, w := range group {
-			emitWorktreeNode(out, w, wi == len(group)-1, withSize, pal)
+			pal.boldCyan("●"), pal.bold(repoLabel(root, g.repo)), pal.dim(g.repo))
+		for wi, w := range g.worktrees {
+			emitWorktreeNode(out, w, wi == len(g.worktrees)-1, withSize, pal)
 			switch {
 			case w.Err != "":
 				errored++
@@ -394,13 +412,13 @@ func emitTree(out io.Writer, root string, wts []Worktree, withSize bool, pal pal
 				unmerged++
 			}
 		}
-		if ri < len(repoOrder)-1 {
+		if ri < len(groups)-1 {
 			fmt.Fprintln(out)
 		}
 	}
 
 	fmt.Fprintf(out, "\n%d worktree(s) in %d repo(s) - %d merged - %d unmerged - %d abandoned",
-		len(wts), len(repoOrder), merged, unmerged, abandoned)
+		len(wts), len(groups), merged, unmerged, abandoned)
 	if errored > 0 {
 		fmt.Fprintf(out, " - %d error", errored)
 	}
@@ -474,16 +492,31 @@ func printLegend(out io.Writer, wts []Worktree, pal palette) {
 	}
 }
 
-type jsonReport struct {
-	Root      string     `json:"root"`
-	Count     int        `json:"count"`
+type jsonRepo struct {
+	Repo      string     `json:"repo"`
+	Name      string     `json:"name"`
 	Worktrees []Worktree `json:"worktrees"`
 }
 
+type jsonReport struct {
+	Root  string     `json:"root"`
+	Count int        `json:"count"`
+	Repos []jsonRepo `json:"repos"`
+}
+
+// emitJSON writes the report as JSON, grouped by repo like the tree.
 func emitJSON(root string, wts []Worktree) {
+	repos := make([]jsonRepo, 0)
+	for _, g := range groupByRepo(wts) {
+		repos = append(repos, jsonRepo{
+			Repo:      g.repo,
+			Name:      repoLabel(root, g.repo),
+			Worktrees: g.worktrees,
+		})
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(jsonReport{Root: root, Count: len(wts), Worktrees: wts})
+	enc.Encode(jsonReport{Root: root, Count: len(wts), Repos: repos})
 }
 
 type pruneAction struct {
