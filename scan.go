@@ -12,24 +12,26 @@ import (
 // discovered, which branch it was forked from, and whether its work is
 // already integrated elsewhere.
 type Worktree struct {
-	Path       string `json:"path"`                  // absolute path to the worktree dir
-	Repo       string `json:"repo"`                  // absolute path to the owning repo root
-	Name       string `json:"name"`                  // basename of the worktree dir
-	Kind       string `json:"kind"`                  // live | abandoned-orphan | abandoned-stale
-	Claude     bool   `json:"claude"`                // lives under a .claude/worktrees/ path
-	Registered bool   `json:"registered"`            // listed by `git worktree list`
-	OnDisk     bool   `json:"on_disk"`               // the directory exists
-	Locked     bool   `json:"locked,omitempty"`      // git worktree lock is set
-	Branch     string `json:"branch"`                // checked-out branch ("" when detached)
-	Head       string `json:"head"`                  // short HEAD sha
-	Base       string `json:"base"`                  // recovered fork base ("" when unknown)
-	BaseFrom   string `json:"base_from,omitempty"`   // how Base was chosen
-	Merged     bool   `json:"merged"`                // work is integrated (see MergedInto)
-	MergedInto string `json:"merged_into,omitempty"` // ref the work was found in
-	Dirty      bool   `json:"dirty"`                 // has uncommitted changes
-	Detached   bool   `json:"detached"`              // HEAD is detached (no branch)
-	SizeBytes  int64  `json:"size_bytes"`            // disk usage, -1 when not measured
-	Err        string `json:"error,omitempty"`
+	Path        string `json:"path"`                   // absolute path to the worktree dir
+	Repo        string `json:"repo"`                   // absolute path to the owning repo root
+	Name        string `json:"name"`                   // basename of the worktree dir
+	Kind        string `json:"kind"`                   // live | abandoned-orphan | abandoned-stale
+	Claude      bool   `json:"claude"`                 // lives under a .claude/worktrees/ path
+	Registered  bool   `json:"registered"`             // listed by `git worktree list`
+	OnDisk      bool   `json:"on_disk"`                // the directory exists
+	Locked      bool   `json:"locked,omitempty"`       // git worktree lock is set
+	LockReason  string `json:"lock_reason,omitempty"`  // reason recorded with the lock
+	GitPrunable bool   `json:"git_prunable,omitempty"` // git's worktree list flags it prunable
+	Branch      string `json:"branch"`                 // checked-out branch ("" when detached)
+	Head        string `json:"head"`                   // short HEAD sha
+	Base        string `json:"base"`                   // recovered fork base ("" when unknown)
+	BaseFrom    string `json:"base_from,omitempty"`    // how Base was chosen
+	Merged      bool   `json:"merged"`                 // work is integrated (see MergedInto)
+	MergedInto  string `json:"merged_into,omitempty"`  // ref the work was found in
+	Dirty       bool   `json:"dirty"`                  // has uncommitted changes
+	Detached    bool   `json:"detached"`               // HEAD is detached (no branch)
+	SizeBytes   int64  `json:"size_bytes"`             // disk usage, -1 when not measured
+	Err         string `json:"error,omitempty"`
 }
 
 // Status is a short classification for a live worktree.
@@ -54,6 +56,16 @@ func (w *Worktree) Status() string {
 // (they are report-only).
 func (w *Worktree) Prunable() bool {
 	return w.Err == "" && w.Kind == "live" && w.Merged
+}
+
+// LockStale reports whether the worktree is locked but the process that took
+// the lock is gone — a stale lock left behind by a dead owner.
+func (w Worktree) LockStale() bool {
+	if !w.Locked {
+		return false
+	}
+	pid, ok := lockOwnerPID(w.LockReason)
+	return ok && !pidAlive(pid)
 }
 
 // kindOf classifies a worktree by how it was discovered.
@@ -219,8 +231,8 @@ func discoverWorktrees(root string, r *reporter) ([]Worktree, error) {
 			result[abs] = &Worktree{
 				Path: abs, Name: filepath.Base(abs), Repo: repoRoot,
 				Branch: en.Branch, Head: short(en.Head), Detached: en.Detached,
-				Registered: true, Locked: en.Locked, OnDisk: dirExists(abs),
-				SizeBytes: -1,
+				Registered: true, Locked: en.Locked, LockReason: en.LockReason,
+				GitPrunable: en.Prunable, OnDisk: dirExists(abs), SizeBytes: -1,
 			}
 		}
 	}

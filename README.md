@@ -34,7 +34,7 @@ stalewood [flags] [path]
 | `--json`     | emit JSON instead of a table                                      |
 | `--prune`    | remove worktrees whose work is merged                             |
 | `--force`    | with `--prune`, also remove merged worktrees that are dirty/locked |
-| `--dry-run`  | with `--prune`, show what would be removed without removing it |
+| `--dry-run`  | with `--prune`, show what would be removed without removing it    |
 | `--verbose`  | log per-worktree detail to stderr                                 |
 | `--quiet`    | suppress progress output                                          |
 | `--no-pager` | do not page long output                                           |
@@ -48,6 +48,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 ```sh
 stalewood --size ~/projects             # report, with disk usage
 stalewood --base oleks/main ~/repo      # force a specific base
+stalewood --prune --dry-run ~/projects  # preview what --prune would remove
 stalewood --prune ~/projects            # remove merged worktrees
 stalewood --json ~/projects             # machine-readable output
 ```
@@ -84,9 +85,16 @@ A live worktree counts as **merged** if either:
   (`git for-each-ref --contains`) — catches work integrated into a branch
   other than the base.
 
-`*` marks uncommitted changes, `[locked]` marks a locked worktree, and
-`merged -> REF` means the work was found in `REF`, a branch other than the
-worktree's own base.
+The STATUS column shows the verdict followed by indicator tags:
+
+| Tag             | Meaning                                                       |
+|-----------------|---------------------------------------------------------------|
+| `*`             | the worktree has uncommitted changes                         |
+| `-> REF`        | merged, but into `REF` — a branch other than its own base     |
+| `[manual]`      | a worktree outside `.claude/worktrees/` (you created it)      |
+| `[locked]`      | a git worktree lock is held                                   |
+| `[lock-stale]`  | locked, but the process that took the lock is gone            |
+| `[git-prunable]`| git's own `worktree list` flags the entry prunable            |
 
 ### Base detection
 
@@ -117,21 +125,22 @@ literal `HEAD` or names a since-removed remote.
 `--prune` runs `git worktree remove` on every **merged** worktree — anywhere,
 not just under `.claude/worktrees/`. Running with `--prune --dry-run` (or
 with no flags at all) reports exactly what `--prune` would remove without
-touching anything. Unmerged worktrees are kept; a
-merged worktree that is dirty or locked is skipped unless `--force` is given.
-**Abandoned worktrees are never removed by `--prune`** — they are reported with
-a suggested fix. Exit status is non-zero if any removal failed.
+touching anything. Unmerged worktrees are kept; a merged worktree that is
+dirty or locked is skipped unless `--force` is given — a `[lock-stale]` skip
+says so, since forcing it is safe. **Abandoned worktrees are never removed by
+`--prune`** — they are reported with a suggested fix. Exit status is non-zero
+if any removal failed.
 
 ## Terminal behaviour
 
 stalewood adapts to where its output goes:
 
-- **Colour** - the STATUS column is coloured on an interactive terminal;
+- **Colour** — the STATUS column is coloured on an interactive terminal;
   disabled when piped or when `NO_COLOR` is set.
-- **Progress** - a transient progress line is shown on an interactive stderr
+- **Progress** — a transient progress line is shown on an interactive stderr
   during a scan. `--quiet` silences it; `--verbose` replaces it with durable
   per-worktree log lines on stderr.
-- **Paging** - human output is paged through `$PAGER` (default `less -FIRX`)
+- **Paging** — human output is paged through `$PAGER` (default `less -FIRX`)
   on an interactive terminal; `--no-pager` disables it. JSON is never paged.
 
 Piped or redirected, output is plain, unpaged and uncoloured. Every git

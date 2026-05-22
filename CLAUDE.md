@@ -32,6 +32,16 @@ reasonable. When changing CLI behaviour, keep to the rules below.
 - No interactive confirmation prompt — the explicit `--prune` flag plus dry-run is the safeguard,
   and it keeps the tool scriptable.
 
+## Status indicators
+The STATUS column is the merge verdict plus bracketed tags. Keep the vocabulary
+small; every tag must be a real signal a reader acts on.
+- `*` — uncommitted changes; `-> REF` — merged into a branch other than the base.
+- `[manual]` — a worktree not under `.claude/worktrees/` (created by hand, not by Claude Code).
+- `[locked]` / `[lock-stale]` — a git worktree lock is held; `lock-stale` when the
+  PID named in the lock reason is no longer running.
+- `[git-prunable]` — git's own `worktree list` flags the entry prunable.
+A new tag earns its place only if it is free to derive or genuinely worth a check.
+
 ## Machine output
 - `--json` emits structured output for scripts. Keep the JSON schema stable and additive.
 

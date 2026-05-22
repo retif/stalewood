@@ -134,6 +134,11 @@ Flags:
   --version      print version and exit
   -h, --help     show this help
 
+STATUS tags:
+  *             uncommitted changes        [manual]        not a Claude worktree
+  [locked]      worktree lock held         [lock-stale]    locked, owner dead
+  [git-prunable] git flags it prunable     -> REF          merged into REF
+
 Exit codes:
   0  success
   1  runtime failure
@@ -184,23 +189,45 @@ func baseLabel(w Worktree) string {
 	}
 }
 
-// statusLabel renders the plain (uncoloured) STATUS text for a worktree.
+// worktreeTags returns the bracketed indicators appended to a worktree's
+// status: provenance, lock state, and git's own prunable flag.
+func worktreeTags(w Worktree) []string {
+	var tags []string
+	if !w.Claude {
+		tags = append(tags, "manual") // a worktree not created by Claude Code
+	}
+	switch {
+	case w.LockStale():
+		tags = append(tags, "lock-stale")
+	case w.Locked:
+		tags = append(tags, "locked")
+	}
+	if w.GitPrunable {
+		tags = append(tags, "git-prunable")
+	}
+	return tags
+}
+
+// statusLabel renders the plain (uncoloured) STATUS text: the merge verdict,
+// then any "-> ref", then bracketed indicator tags.
 func statusLabel(w Worktree) string {
 	if w.Err != "" {
 		return "error: " + w.Err
 	}
+	var s string
 	switch w.Kind {
 	case "abandoned-orphan":
-		return "abandoned (orphan dir)"
+		s = "abandoned (orphan dir)"
 	case "abandoned-stale":
-		return "abandoned (stale entry)"
-	}
-	s := w.Status()
-	if w.Locked {
-		s += " [locked]"
+		s = "abandoned (stale entry)"
+	default:
+		s = w.Status()
 	}
 	if w.Merged && w.MergedInto != "" && w.MergedInto != w.Base {
 		s += " -> " + w.MergedInto
+	}
+	for _, tag := range worktreeTags(w) {
+		s += " [" + tag + "]"
 	}
 	return s
 }
@@ -347,9 +374,12 @@ func runPrune(root string, wts []Worktree, force, dryRun, jsonOut, noPager bool,
 			kept++
 		case (w.Dirty || w.Locked) && !force:
 			a.Action = "skipped"
-			if w.Dirty {
+			switch {
+			case w.Dirty:
 				a.Reason = "uncommitted changes (rerun with --force)"
-			} else {
+			case w.LockStale():
+				a.Reason = "stale lock, dead owner - safe to rerun with --force"
+			default:
 				a.Reason = "locked (rerun with --force)"
 			}
 			skipped++

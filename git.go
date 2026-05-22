@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -86,13 +88,14 @@ func commonGitDir(dir string) (string, bool) {
 
 // wtEntry is one linked worktree from `git worktree list --porcelain`.
 type wtEntry struct {
-	Path     string
-	Head     string
-	Branch   string // short name, "" when detached
-	Detached bool
-	Bare     bool
-	Locked   bool
-	Prunable bool
+	Path       string
+	Head       string
+	Branch     string // short name, "" when detached
+	Detached   bool
+	Bare       bool
+	Locked     bool
+	LockReason string
+	Prunable   bool
 }
 
 // listWorktrees parses `git worktree list --porcelain` for the repo containing
@@ -128,6 +131,7 @@ func listWorktrees(dir string) ([]wtEntry, error) {
 			cur.Branch = shortRef(strings.TrimSpace(strings.TrimPrefix(ln, "branch ")))
 		case strings.HasPrefix(ln, "locked"):
 			cur.Locked = true
+			cur.LockReason = strings.TrimSpace(ln[len("locked"):])
 		case strings.HasPrefix(ln, "prunable"):
 			cur.Prunable = true
 		}
@@ -397,4 +401,30 @@ func removeWorktree(repo, worktree string, force bool) error {
 	args = append(args, worktree)
 	_, err := git(repo, args...)
 	return err
+}
+
+// lockOwnerPID extracts the process id from a worktree lock reason of the form
+// "... (pid N)". ok is false when the reason carries no pid.
+func lockOwnerPID(reason string) (int, bool) {
+	i := strings.Index(reason, "(pid ")
+	if i < 0 {
+		return 0, false
+	}
+	rest := reason[i+len("(pid "):]
+	j := strings.IndexByte(rest, ')')
+	if j < 0 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(rest[:j]))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// pidAlive reports whether a process with the given pid currently exists.
+// Signal 0 checks for existence without delivering a signal.
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
 }

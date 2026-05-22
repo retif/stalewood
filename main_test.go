@@ -66,17 +66,101 @@ func TestStatusLabel(t *testing.T) {
 		w    Worktree
 		want string
 	}{
-		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "main"}, "merged"},
-		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
-		{Worktree{Kind: "live"}, "unmerged"},
-		{Worktree{Kind: "live", Locked: true}, "unmerged [locked]"},
-		{Worktree{Kind: "abandoned-orphan"}, "abandoned (orphan dir)"},
-		{Worktree{Kind: "abandoned-stale"}, "abandoned (stale entry)"},
+		{Worktree{Kind: "live", Claude: true, Merged: true, Base: "main", MergedInto: "main"}, "merged"},
+		{Worktree{Kind: "live", Claude: true, Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
+		{Worktree{Kind: "live", Claude: true}, "unmerged"},
+		{Worktree{Kind: "live", Claude: true, Locked: true}, "unmerged [locked]"},
+		{Worktree{Kind: "live", Claude: false}, "unmerged [manual]"},
+		{Worktree{Kind: "live", Claude: true, GitPrunable: true}, "unmerged [git-prunable]"},
+		{Worktree{Kind: "abandoned-stale", Claude: true, GitPrunable: true}, "abandoned (stale entry) [git-prunable]"},
+		{Worktree{Kind: "abandoned-orphan", Claude: true}, "abandoned (orphan dir)"},
 		{Worktree{Err: "boom"}, "error: boom"},
 	}
 	for i, c := range cases {
 		if got := statusLabel(c.w); got != c.want {
 			t.Errorf("case %d: statusLabel = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
+func TestLockOwnerPID(t *testing.T) {
+	cases := []struct {
+		reason string
+		pid    int
+		ok     bool
+	}{
+		{"claude agent agent-x (pid 2685793)", 2685793, true},
+		{"locked by hand", 0, false},
+		{"", 0, false},
+		{"weird (pid notanumber)", 0, false},
+	}
+	for i, c := range cases {
+		pid, ok := lockOwnerPID(c.reason)
+		if ok != c.ok || pid != c.pid {
+			t.Errorf("case %d: lockOwnerPID(%q) = %d,%v want %d,%v", i, c.reason, pid, ok, c.pid, c.ok)
+		}
+	}
+}
+
+func TestLockStale(t *testing.T) {
+	// pid 1 (init) is always alive; a pid far above the kernel maximum never exists.
+	if (Worktree{Locked: true, LockReason: "x (pid 1)"}).LockStale() {
+		t.Errorf("lock owned by pid 1 reported stale")
+	}
+	if !(Worktree{Locked: true, LockReason: "x (pid 2147483646)"}).LockStale() {
+		t.Errorf("lock owned by a non-existent pid not reported stale")
+	}
+	if (Worktree{Locked: true, LockReason: "locked by hand"}).LockStale() {
+		t.Errorf("lock with no pid reported stale")
+	}
+	if (Worktree{Locked: false}).LockStale() {
+		t.Errorf("unlocked worktree reported stale")
+	}
+}
+
+func TestWorktreeTags(t *testing.T) {
+	cases := []struct {
+		w    Worktree
+		want string
+	}{
+		{Worktree{Claude: true}, ""},
+		{Worktree{Claude: false}, "manual"},
+		{Worktree{Claude: true, Locked: true}, "locked"},
+		{Worktree{Claude: true, Locked: true, LockReason: "x (pid 2147483646)"}, "lock-stale"},
+		{Worktree{Claude: true, GitPrunable: true}, "git-prunable"},
+		{Worktree{Claude: false, GitPrunable: true}, "manual git-prunable"},
+	}
+	for i, c := range cases {
+		if got := strings.Join(worktreeTags(c.w), " "); got != c.want {
+			t.Errorf("case %d: worktreeTags = %q, want %q", i, got, c.want)
+		}
+	}
+}
+
+func TestPalette(t *testing.T) {
+	off := palette{enabled: false}
+	if got := off.green("x"); got != "x" {
+		t.Errorf("disabled palette coloured output: %q", got)
+	}
+	on := palette{enabled: true}
+	if got := on.green("x"); got == "x" || !strings.Contains(got, "x") {
+		t.Errorf("enabled palette did not wrap: %q", got)
+	}
+	if got := on.green(""); got != "" {
+		t.Errorf("palette coloured an empty string: %q", got)
+	}
+}
+
+func TestPaintStatus(t *testing.T) {
+	pal := palette{enabled: false} // disabled palette: paintStatus is a pass-through
+	for i, w := range []Worktree{
+		{Kind: "live", Merged: true},
+		{Kind: "abandoned-orphan"},
+		{Err: "boom"},
+		{Kind: "live"},
+	} {
+		if got := paintStatus(pal, w, "LBL"); got != "LBL" {
+			t.Errorf("case %d: paintStatus = %q, want LBL", i, got)
 		}
 	}
 }
@@ -243,7 +327,7 @@ func TestBaseFromCreationSHA(t *testing.T) {
 	}
 }
 
-// TestBaseOverride verifies -base forces the ref and marks BaseFrom as "flag".
+// TestBaseOverride verifies --base forces the ref and marks BaseFrom as "flag".
 func TestBaseOverride(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -299,7 +383,6 @@ func TestOrphanWorktree(t *testing.T) {
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A .git file pointing at a git dir that does not exist.
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /nowhere/.git/worktrees/orphan\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -333,30 +416,26 @@ func TestPlainDirSkipped(t *testing.T) {
 	}
 }
 
-func TestPalette(t *testing.T) {
-	off := palette{enabled: false}
-	if got := off.green("x"); got != "x" {
-		t.Errorf("disabled palette coloured output: %q", got)
+// TestLockedWorktree verifies a real `git worktree lock` is detected, with its
+// reason captured.
+func TestLockedWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
 	}
-	on := palette{enabled: true}
-	if got := on.green("x"); got == "x" || !strings.Contains(got, "x") {
-		t.Errorf("enabled palette did not wrap: %q", got)
-	}
-	if got := on.green(""); got != "" {
-		t.Errorf("palette coloured an empty string: %q", got)
-	}
-}
+	root := t.TempDir()
+	repo := initRepo(t, root, "r")
+	wt := filepath.Join(mkClaudeWorktrees(t, repo), "held")
+	run(t, repo, "git", "worktree", "add", "-q", "-b", "held", wt, "main")
+	run(t, repo, "git", "worktree", "lock", "--reason", "test hold (pid 1)", wt)
 
-func TestPaintStatus(t *testing.T) {
-	pal := palette{enabled: false} // disabled palette: paintStatus is a pass-through
-	for i, w := range []Worktree{
-		{Kind: "live", Merged: true},
-		{Kind: "abandoned-orphan"},
-		{Err: "boom"},
-		{Kind: "live"},
-	} {
-		if got := paintStatus(pal, w, "LBL"); got != "LBL" {
-			t.Errorf("case %d: paintStatus = %q, want LBL", i, got)
-		}
+	w := discoverAnalyzed(t, root, "")["held"]
+	if !w.Locked {
+		t.Fatalf("locked worktree not reported as locked")
+	}
+	if !strings.Contains(w.LockReason, "test hold") {
+		t.Errorf("LockReason = %q, want it to contain the reason", w.LockReason)
+	}
+	if w.LockStale() {
+		t.Errorf("lock owned by pid 1 reported stale")
 	}
 }
