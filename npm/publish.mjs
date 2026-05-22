@@ -13,8 +13,16 @@ const dryRun = !!process.env.NPM_DRY_RUN;
 const withProvenance = !process.env.NPM_NO_PROVENANCE;
 const publishArgs = dryRun
   ? ["--dry-run", "--ignore-scripts"]
-  : ["--access", "public", "--ignore-scripts", ...(withProvenance ? ["--provenance"] : [])];
-const repository = { type: "git", url: "git+https://github.com/retif/stalewood.git" };
+  : [
+      "--access",
+      "public",
+      "--ignore-scripts",
+      ...(withProvenance ? ["--provenance"] : []),
+    ];
+const repository = {
+  type: "git",
+  url: "git+https://github.com/retif/stalewood.git",
+};
 
 const platforms = [
   { goos: "linux", goarch: "amd64", os: "linux", cpu: "x64" },
@@ -36,7 +44,15 @@ for (const p of platforms) {
   console.log(`building ${pkg} (v${version})`);
   execFileSync(
     "go",
-    ["build", "-trimpath", "-ldflags", "-s -w", "-o", join(dir, "bin", exe), "."],
+    [
+      "build",
+      "-trimpath",
+      "-ldflags",
+      "-s -w",
+      "-o",
+      join(dir, "bin", exe),
+      ".",
+    ],
     {
       cwd: root,
       stdio: "inherit",
@@ -77,7 +93,10 @@ for (const p of platforms) {
 
 const main = join(dist, "stalewood");
 mkdirSync(join(main, "bin"), { recursive: true });
-copyFileSync(join(root, "npm", "stalewood.js"), join(main, "bin", "stalewood.js"));
+copyFileSync(
+  join(root, "npm", "stalewood.js"),
+  join(main, "bin", "stalewood.js"),
+);
 copyFileSync(join(root, "README.md"), join(main, "README.md"));
 copyFileSync(join(root, "LICENSE"), join(main, "LICENSE"));
 writeFileSync(
