@@ -52,3 +52,11 @@ dist:
 # remove build artifacts
 clean:
     rm -f {{binary}}
+
+# cut a release: writes VERSION, commits and tags vX.Y.Z (e.g. just release 0.1.5)
+release version:
+    printf '%s\n' '{{version}}' > VERSION
+    git add VERSION
+    git commit -m 'Release v{{version}}'
+    git tag -a 'v{{version}}' -m 'stalewood v{{version}}'
+    @echo 'tagged v{{version}} - push with: git push origin main v{{version}}'

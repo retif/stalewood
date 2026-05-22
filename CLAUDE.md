@@ -102,11 +102,14 @@ comma = AND within one `--lint` value, a repeated `--lint` = OR, `!` = NOT.
 
 ## Releasing
 
-Tag `vX.Y.Z` and push the tag; `.github/workflows/release.yml` runs
-GoReleaser (`.goreleaser.yaml`), which cross-builds, publishes a GitHub
-Release, and updates the Homebrew formula in `retif/homebrew-tap`. The
-`version` var is stamped via ldflags; plain `go install` builds fall back
-to the module version. `just dist` builds a local snapshot.
+The `VERSION` file at the repo root is the single source of truth for the
+version — `flake.nix` reads it and the Go binary embeds it via `//go:embed`.
+
+Release with `just release X.Y.Z`: it writes `VERSION`, commits, and tags
+`vX.Y.Z`. Then push `main` and the tag. `release.yml` asserts `VERSION`
+matches the tag, then runs GoReleaser (`.goreleaser.yaml`): cross-builds,
+GitHub Release, deb/rpm/snap packages, the Homebrew formula, cosign
+signatures, SBOMs and SLSA provenance. `just dist` builds a local snapshot.
 
 ## Security & provenance
 

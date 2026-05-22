@@ -8,6 +8,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,13 +16,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strings"
 )
 
-// version is overridden at release time via -ldflags "-X main.version=...".
-var version = "dev"
+//go:embed VERSION
+var versionFile string
+
+// version is the release version, read from the repo VERSION file.
+var version = strings.TrimSpace(versionFile)
 
 func main() {
 	fs := flag.NewFlagSet("stalewood", flag.ContinueOnError)
@@ -54,7 +57,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Println("stalewood", buildVersion())
+		fmt.Println("stalewood", version)
 		os.Exit(0)
 	}
 	if *printSchema {
@@ -189,20 +192,6 @@ Exit codes:
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "stalewood:", err)
 	os.Exit(1)
-}
-
-// buildVersion returns the release version: the -ldflags value when set,
-// else the module version recorded by `go install`, else "dev".
-func buildVersion() string {
-	if version != "dev" {
-		return version
-	}
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		if v := bi.Main.Version; v != "" && v != "(devel)" {
-			return v
-		}
-	}
-	return version
 }
 
 // usageFail reports a bad invocation on stderr, prints usage, and exits 2.

@@ -26,7 +26,7 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.buildGoModule {
           pname = "stalewood";
-          version = "0.1.0";
+          version = nixpkgs.lib.fileContents ./VERSION;
           src = ./.;
           vendorHash = null; # stdlib only — no module dependencies
           meta = {
