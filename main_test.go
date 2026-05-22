@@ -68,13 +68,13 @@ func TestWorktreeTags(t *testing.T) {
 	}{
 		{Worktree{}, ""},
 		{Worktree{Claude: true}, "claude"},
-		{Worktree{Modified: true}, "modified"},
-		{Worktree{Untracked: true}, "untracked"},
-		{Worktree{Modified: true, Untracked: true}, "modified untracked"},
+		{Worktree{Modified: true}, "modified files"},
+		{Worktree{Untracked: true}, "untracked files"},
+		{Worktree{Modified: true, Untracked: true}, "modified files untracked files"},
 		{Worktree{Claude: true, Locked: true}, "claude locked"},
 		{Worktree{Claude: true, Locked: true, LockReason: "x (pid 2147483646)"}, "claude lock-stale"},
 		{Worktree{GitPrunable: true}, "git-prunable"},
-		{Worktree{Claude: true, Untracked: true, GitPrunable: true}, "claude untracked git-prunable"},
+		{Worktree{Claude: true, Untracked: true, GitPrunable: true}, "claude untracked files git-prunable"},
 	}
 	for i, c := range cases {
 		if got := strings.Join(worktreeTags(c.w), " "); got != c.want {
@@ -92,8 +92,8 @@ func TestStatusLabel(t *testing.T) {
 		{Worktree{Kind: "live", Merged: true, Base: "main", MergedInto: "oleks/main"}, "merged -> oleks/main"},
 		{Worktree{Kind: "live"}, "unmerged"},
 		{Worktree{Kind: "live", Claude: true}, "unmerged [claude]"},
-		{Worktree{Kind: "live", Untracked: true}, "unmerged [untracked]"},
-		{Worktree{Kind: "live", Modified: true, Locked: true}, "unmerged [modified] [locked]"},
+		{Worktree{Kind: "live", Untracked: true}, "unmerged [untracked files]"},
+		{Worktree{Kind: "live", Modified: true, Locked: true}, "unmerged [modified files] [locked]"},
 		{Worktree{Kind: "abandoned-orphan"}, "abandoned (orphan dir)"},
 		{Worktree{Kind: "abandoned-stale", GitPrunable: true}, "abandoned (stale entry) [git-prunable]"},
 		{Worktree{Err: "boom"}, "error: boom"},

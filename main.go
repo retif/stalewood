@@ -119,7 +119,7 @@ Examples:
 
 The report is a tree grouped by repo: each worktree shows a glyph (merged,
 unmerged, abandoned, error), its full path, branch and base, plus tags such as
-[claude], [modified], [untracked], [lock-stale]. A legend prints below it.
+[claude], [modified files], [untracked files], [lock-stale]. A legend prints below it.
 
 Flags:
   --prune        remove worktrees whose work is merged
@@ -238,10 +238,10 @@ func worktreeTags(w Worktree) []string {
 		tags = append(tags, "claude")
 	}
 	if w.Modified {
-		tags = append(tags, "modified")
+		tags = append(tags, "modified files")
 	}
 	if w.Untracked {
-		tags = append(tags, "untracked")
+		tags = append(tags, "untracked files")
 	}
 	switch {
 	case w.LockStale():
@@ -259,7 +259,7 @@ func worktreeTags(w Worktree) []string {
 func paintTag(pal palette, tag string) string {
 	t := "[" + tag + "]"
 	switch tag {
-	case "modified", "untracked", "lock-stale", "git-prunable":
+	case "modified files", "untracked files", "lock-stale", "git-prunable":
 		return pal.yellow(t)
 	case "claude":
 		return pal.cyan(t)
@@ -448,8 +448,8 @@ func printLegend(out io.Writer, wts []Worktree, pal palette) {
 	add(anyError, "!", pal.paint("1;31", "!"), "error - could not be analyzed")
 	for _, td := range []struct{ tag, desc string }{
 		{"claude", "created by Claude Code (.claude/worktrees/)"},
-		{"modified", "tracked files have uncommitted changes"},
-		{"untracked", "the worktree has untracked files"},
+		{"modified files", "tracked files have uncommitted edits"},
+		{"untracked files", "files present that git is not tracking"},
 		{"locked", "a git worktree lock is held"},
 		{"lock-stale", "locked, but the locking process is gone"},
 		{"git-prunable", "git's own worktree list flags it prunable"},

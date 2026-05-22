@@ -41,7 +41,7 @@ Keep the vocabulary small; every glyph and tag must be a signal a reader acts on
 - Glyphs: `✓` merged · `✗` unmerged · `⚠` abandoned · `!` error.
 - `-> REF` — merged into a branch other than the worktree's own base.
 - `[claude]` — created by Claude Code (under `.claude/worktrees/`); manual worktrees carry no tag.
-- `[modified]` — tracked files changed; `[untracked]` — untracked files present.
+- `[modified files]` — tracked files changed; `[untracked files]` — untracked files present.
 - `[locked]` / `[lock-stale]` — a git worktree lock is held; `lock-stale` when the
   PID named in the lock reason is no longer running.
 - `[git-prunable]` — git's own `worktree list` flags the entry prunable.

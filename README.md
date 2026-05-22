@@ -81,8 +81,8 @@ that actually appear in that run.
 | `!`             | error — the worktree could not be analyzed                    |
 | `-> REF`        | merged, but into `REF` — a branch other than its own base     |
 | `[claude]`      | created by Claude Code (under `.claude/worktrees/`)           |
-| `[modified]`    | tracked files have uncommitted changes                        |
-| `[untracked]`   | the worktree has untracked files                              |
+| `[modified files]`    | tracked files have uncommitted changes                        |
+| `[untracked files]`   | the worktree has untracked files                              |
 | `[locked]`      | a git worktree lock is held                                   |
 | `[lock-stale]`  | locked, but the process that took the lock is gone            |
 | `[git-prunable]`| git's own `worktree list` flags the entry prunable            |
