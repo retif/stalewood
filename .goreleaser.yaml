@@ -37,6 +37,23 @@ nfpms:
       - deb
       - rpm
 
+snapcrafts:
+  - name: stalewood
+    title: stalewood
+    summary: Find and reap merged git worktrees
+    description: |
+      stalewood scans a directory tree for git worktrees and reports which
+      ones are safe to delete - work already integrated into another branch -
+      and can prune them. A --lint mode fits into a git hook.
+    grade: stable
+    confinement: classic
+    license: MIT
+    base: core24
+    publish: false
+    apps:
+      stalewood:
+        command: stalewood
+
 checksum:
   name_template: checksums.txt
 

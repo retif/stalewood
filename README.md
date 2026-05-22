@@ -33,7 +33,8 @@ brew install retif/tap/stalewood
 nix run github:retif/stalewood -- --help
 ```
 
-Prebuilt binaries for Linux, macOS and Windows are on the
+Prebuilt binaries for Linux, macOS and Windows — plus Linux `.deb`,
+`.rpm` and `.snap` packages — are on the
 [releases page](https://github.com/retif/stalewood/releases).
 
 ## Build from source
