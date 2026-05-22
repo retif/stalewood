@@ -80,6 +80,10 @@ changelog:
       - "^chore:"
       - "Merge "
 
+release:
+  extra_files:
+    - glob: dist/*.snap
+
 brews:
   - repository:
       owner: retif
