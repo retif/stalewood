@@ -108,6 +108,15 @@ Release, and updates the Homebrew formula in `retif/homebrew-tap`. The
 `version` var is stamped via ldflags; plain `go install` builds fall back
 to the module version. `just dist` builds a local snapshot.
 
+## Security & provenance
+
+- CI runs CodeQL, govulncheck and the OpenSSF Scorecard; Dependabot keeps
+  the GitHub Actions versions current.
+- Releases carry a signed SLSA build-provenance attestation, a keyless
+  cosign signature over `checksums.txt`, and a syft SBOM per archive.
+- Keep all of this CI-only — no third-party scanning accounts and no
+  long-lived secrets.
+
 ## Keep it boring
 
 - The standard-library `flag` package is sufficient; do not add a CLI

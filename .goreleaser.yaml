@@ -28,6 +28,22 @@ archives:
 checksum:
   name_template: checksums.txt
 
+sboms:
+  - artifacts: archive
+
+signs:
+  - cmd: cosign
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    artifacts: checksum
+    output: true
+
 changelog:
   sort: asc
   filters:
