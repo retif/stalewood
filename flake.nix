@@ -3,9 +3,15 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
+      ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
@@ -14,9 +20,9 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             go
-            gopls      # language server
-            gotools    # goimports etc.
-            go-tools   # staticcheck
+            gopls # language server
+            gotools # goimports etc.
+            go-tools # staticcheck
             just
           ];
         };

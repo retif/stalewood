@@ -8,7 +8,7 @@ default:
 
 # build the binary
 build:
-    go build -o {{binary}} .
+    go build -o {{ binary }} .
 
 # run the test suite
 test:
@@ -39,7 +39,7 @@ check: fmt-check vet test
 
 # run stalewood (pass flags/path as args, e.g. `just run -size ~/projects`)
 run *args:
-    go run . {{args}}
+    go run . {{ args }}
 
 # install the binary to GOBIN (~/go/bin by default)
 install:
@@ -51,12 +51,12 @@ dist:
 
 # remove build artifacts
 clean:
-    rm -f {{binary}}
+    rm -f {{ binary }}
 
 # cut a release: writes VERSION, commits and tags vX.Y.Z (e.g. just release 0.1.5)
 release version:
-    printf '%s\n' '{{version}}' > VERSION
+    printf '%s\n' '{{ version }}' > VERSION
     git add VERSION
-    git commit -m 'Release v{{version}}'
-    git tag -a 'v{{version}}' -m 'stalewood v{{version}}'
-    @echo 'tagged v{{version}} - push with: git push origin main v{{version}}'
+    git commit -m 'Release v{{ version }}'
+    git tag -a 'v{{ version }}' -m 'stalewood v{{ version }}'
+    @echo 'tagged v{{ version }} - push with: git push origin main v{{ version }}'
